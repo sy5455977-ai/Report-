@@ -163,3 +163,53 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
 
   throw lastError || new Error('Failed to generate response from Gemini API');
 }
+
+// Direct client-side Gemini TTS generator for Bell & Black voices on Vercel and Netlify
+export async function generateGeminiDirectTTS(
+  text: string,
+  voiceName: 'Zephyr' | 'Charon' | string = 'Zephyr',
+  apiKey: string
+): Promise<string | null> {
+  const cleanKey = apiKey.trim();
+  if (!cleanKey || !text.trim()) return null;
+
+  // Clean out any questions marker or heavy punctuation before speaking
+  const speechText = text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
+  if (!speechText) return null;
+
+  const ttsModels = ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts'];
+
+  for (const model of ttsModels) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: speechText }] }],
+          generationConfig: {
+            responseModalities: ["AUDIO"],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName }
+              }
+            }
+          }
+        })
+      });
+
+      if (!res.ok) continue;
+
+      const data = await res.json();
+      const base64Audio = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (base64Audio) {
+        return base64Audio;
+      }
+    } catch (e) {
+      console.warn(`[Client TTS] ${model} failed, trying next fallback:`, e);
+    }
+  }
+
+  return null;
+}
+

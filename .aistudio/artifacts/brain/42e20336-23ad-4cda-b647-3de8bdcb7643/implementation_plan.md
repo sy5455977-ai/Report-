@@ -1,23 +1,23 @@
-# Blackbell AGI - Client API Key & Vercel/Netlify Deployment Implementation Plan
+# Vercel & Netlify Voice Model Support - Implementation Plan
 
-Implement a polished, initial Sign In and Sign Up authentication experience featuring a mandatory Gemini API Key input directly beneath the Username field, seamless client-side direct Gemini execution for instant deployment on Vercel and Netlify without server dependencies, and in-app API key management in the top navigation and settings.
+Enable fully functional, hands-free real-time voice conversations for Blackbell AGI on static and serverless platforms like Vercel and Netlify where persistent WebSocket servers are unsupported.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
 > The architectural decisions below were confirmed through the interactive requirements interview and govern this build:
 
-- **Confirmed Decision 1 (Mandatory API Key)**: Every user must provide their personal Gemini API Key upon registration/sign-in so the app operates with individual quotas. A direct link to Google AI Studio (`aistudio.google.com/app/apikey`) and validation tester are embedded.
-- **Confirmed Decision 2 (Vercel & Netlify Compatibility via Client-Only Direct Mode)**: When deployed on static host providers like Vercel or Netlify (where Node/SQLite backend routes are unavailable), the frontend will automatically invoke the Gemini REST API directly from the browser using the user's stored API key, supporting full personality prompts (Bell & Black personas) and conversation flow.
-- **Confirmed Decision 3 (In-App Key Management)**: An accessible API Key manager is embedded in the top header and settings menu, enabling users to view, test, and swap their Gemini API key at any time after logging in.
+- **Confirmed Decision 1 (Automatic Hands-Free Voice Loop)**: When deployed on Vercel, Netlify, or environments where the backend `/live` WebSocket is unreachable, the app will automatically engage a continuous hands-free voice loop using browser speech recognition (`SpeechRecognition` / `webkitSpeechRecognition`), automatic turn-taking, and responsive silence detection.
+- **Confirmed Decision 2 (Gemini Audio TTS with Browser Voice Fallback)**: The AI companion's spoken responses will be generated using Google Gemini's Audio model (`gemini-3.8-flash-lite-tts`) with dedicated persona voices (`Zephyr` for Bell, `Charon` for Black), with instantaneous fallback to high-quality browser Speech Synthesis.
+- **Confirmed Decision 3 (Seamless Fallback Architecture)**: If WebSocket fails to connect to `/live` (the standard failure mode on Vercel and Netlify), the voice interface will automatically transition to the Client-Direct Voice Engine without throwing network errors or hanging.
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **What It Does**: Presents a high-contrast, modern authentication screen upon first visit with tabbed Sign In / Sign Up modes. On registration, users input email, username, **Gemini API Key**, and password. The key is securely validated and persisted in `localStorage`. The app works in dual mode: if deployed with an Express backend, it proxies or utilizes backend services; if deployed statically to Vercel or Netlify, it initiates direct browser calls to Gemini, enabling zero-server deployment.
-- **Target Audience**: End users and developers deploying Blackbell AGI on Vercel, Netlify, Cloudflare Pages, or traditional Node servers who want instant, reliable AI companion chat without backend hosting hurdles.
-- **Key Value**: 100% portable single-page app capability on Vercel/Netlify while preserving the rich Bell/Black dual-persona chat experience with the user's own free Gemini API key.
+- **What It Does**: Enables end-to-end voice conversations with Bell and Black personas on static hosts (Vercel, Netlify, Cloudflare Pages) using the user's personal Gemini API key. Users speak naturally through their microphone; the app transcribes their words in real-time, queries Gemini for companion responses, speaks the answers with expressive voice models, animates the companion video screen, and automatically resumes listening.
+- **Target Audience**: Users deploying Blackbell AGI on free or static hosting providers without dedicated Node/WebSocket server infrastructure.
+- **Key Value**: 100% portable voice assistant capabilities anywhere without requiring WebSocket servers or server-side streaming bridges.
 
 ---
 
@@ -25,84 +25,81 @@ Implement a polished, initial Sign In and Sign Up authentication experience feat
 
 ### Key User Flows
 
-1. **Initial Zero-State (Auth Screen First)**:
-   - User visits the app URL; if no active session and valid API key are detected, the refined `AuthScreen` is displayed immediately.
-   - User toggles between "Sign Up" and "Sign In".
-   - In "Sign Up", fields appear in order: Email, **Username**, **Gemini API Key** (with eye toggle to mask/unmask, paste button, and "Get Free API Key" shortcut link), and Password.
-   - Clicking "Validate & Create Account" conducts an instantaneous light probe against Gemini API (`gemini-2.5-flash` or `gemini-3.1-flash-lite`) to verify the key's validity before saving.
-2. **Post-Login Top Bar & Key Management**:
-   - Once authenticated, the user enters the Blackbell companion workspace.
-   - The top navigation bar displays a dedicated **Key Status & Settings** control (`Key: AI Studio Active`).
-   - Clicking opens the API Key modal to update the key, test connectivity, or inspect quota status.
-3. **Vercel / Netlify Standalone Execution**:
-   - When a user sends a message, the app checks if the backend `/api/chat` is alive. If on Vercel/Netlify (where `/api/chat` returns 404 or fails), it seamlessly switches to the client-side direct Gemini runner with complete persona instructions, follow-up suggestions, and local session memory.
-
-### Visual Identity & Theme
-- **Canvas & Surfaces**: Neutral dark canvas (`#0B0D13`), structural container backgrounds (`#151926` / `#1A1E2E`), with hairline dividers (`border-white/10`).
-- **Typography**: Display headings in `Plus Jakarta Sans` / `Outfit`, body in clean `Inter` / `DM Sans`, and API keys / model tags in `JetBrains Mono` (`font-mono text-xs`).
-- **Accent Palette**: Rich royal violet (`#7C3AED` to `#6D28D9`) for primary actions, subtle emerald accents (`#10B981`) for valid key status, and crimson (`#EF4444`) for errors.
+1. **Entering Voice Mode**:
+   - User switches to **VOICE** mode via the sidebar toggle or starts a call.
+   - The app attempts to initialize audio. On Vercel/Netlify, WebSocket failure is gracefully trapped; the client activates the **Client-Direct Voice Engine**.
+   - Network status displays `Connected (Direct Client Voice)` in green with a live audio pulse.
+2. **Hands-Free Speech Interaction**:
+   - Microphone activates with noise suppression and echo cancellation.
+   - User speaks in Hindi, Hinglish, or English. Live speech is transcribed word-for-word in the transcript overlay on the video screen.
+   - Upon a natural speech pause (1.2s silence detection), speech recognition pauses and queries Gemini.
+3. **Companion Spoken Output & Avatar Animation**:
+   - `BellVideoScreen` triggers talking video state (`isAiSpeaking: true`).
+   - Response audio is fetched from Gemini TTS (`gemini-3.8-flash-lite-tts`) and played at 24kHz.
+   - When playback finishes, speech recognition automatically re-arms, ready for the user's next sentence.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Dual-Engine AI Routing (Client Direct + Server Fallback)**
-  - *Chosen Approach*: Implement an autonomous client-side Gemini service (`src/utils/geminiClient.ts`) that executes queries directly against Google's API when running on static hosts (Vercel/Netlify), while continuing to support Express backend routes if present.
-  - *Why*: Guarantees that deploying the build output (`dist/`) directly to Vercel or Netlify works out of the box with zero server configuration or SQLite failures.
-  - *Alternatives Considered*: Vercel Serverless Functions (requires rewriting SQLite backend to Postgres/KV and Vercel-specific adapters, breaking standard local runtimes).
-- **Decision 2: Client-Side Session Storage with Local Persistence**
-  - *Chosen Approach*: On static deployments without an active backend DB, chat history and memories are persisted in `localStorage` under the user's username namespace.
-  - *Why*: Ensures chat history and persona memories persist seamlessly across page refreshes on Vercel/Netlify without needing external database provisioning.
+- **Decision 1: Continuous Web Speech Recognition with Pause Debounce**
+  - *Chosen Approach*: Implement a resilient speech listener with silence threshold debounce (1200ms) that automatically commits sentences and triggers generation.
+  - *Why*: Delivers a natural "call-like" hands-free conversational rhythm without requiring users to hold buttons or click to talk.
+  - *Alternatives Considered*: Manual push-to-talk button (rejected by user preference for hands-free loop).
+- **Decision 2: Direct Client-Side Gemini Audio TTS Dispatcher**
+  - *Chosen Approach*: Call `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite-tts:generateContent?key=${apiKey}` directly from browser with `responseModalities: ["AUDIO"]`.
+  - *Why*: Delivers expressive, studio-quality speech natively for both Bell and Black personalities without needing a proxy backend.
 
 ---
 
 ## 4. Technical Architecture & Data Strategy
 
-### Architecture & Component Diagram
+### Component & Voice Loop Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                 Blackbell AGI Client (SPA)                  │
-├──────────────────────────────┬──────────────────────────────┤
-│          AuthScreen          │        Main Workspace        │
-│  - Email                     │  - Top Bar (Key Manager)     │
-│  - Username                  │  - Bell/Black Persona Chat   │
-│  - Gemini API Key (Mandatory)│  - History Sidebar           │
-│  - Password                  │  - Video & Avatar Canvas     │
-└──────────────┬───────────────┴──────────────┬───────────────┘
-               │                              │
-               ▼                              ▼
-     localStorage Storage             Dual AI Dispatcher
-  (User, Key, Sessions, Mems)      (src/utils/geminiClient.ts)
-                                              │
-                    ┌─────────────────────────┴─────────────────────────┐
-                    ▼                                                   ▼
-         [Vercel / Netlify Mode]                                [Full-Stack Mode]
-         Direct Client AI Runner                                Server /api/chat
-    (Google Generative Language API)                       (Express + SQLite Engine)
+│              Blackbell Voice Engine (App.tsx)               │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│   [User Speaks] ──▶ Continuous SpeechRecognition            │
+│                            │                                │
+│                     (1.2s Silence)                          │
+│                            ▼                                │
+│             callDirectGeminiChat (Hinglish AI)              │
+│                            │                                │
+│                    (Response Text)                          │
+│                            ▼                                │
+│           generateGeminiDirectTTS (Gemini 3.8 TTS)          │
+│                      /           \                          │
+│                (Success)       (Fallback)                   │
+│                   ▼                ▼                        │
+│            WAV 24kHz Audio   Browser SpeechSynthesis        │
+│                   │                │                        │
+│                   ▼                ▼                        │
+│           [BellVideoScreen Talking Video Animation]         │
+│                            │                                │
+│                    (Audio Ended)                            │
+│                            ▼                                │
+│             [Auto-Resume SpeechRecognition Loop]            │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### Data Model & State Mapping
+### Module Responsibilities
 
-- **Auth State (`AuthUser`)**:
-  - `email`: string
-  - `username`: string
-  - `apiKey`: string (persisted in `localStorage.getItem('blackbell_gemini_api_key')`)
-  - `isAdmin`: boolean (checked against admin email)
-  - `sessionToken`: string
-- **Gemini Direct Dispatcher (`generateGeminiDirectMessage`)**:
-  - Accepts messages, personality (`bell` | `black`), and user API key.
-  - Constructs system prompts with Hinglish girlfriend/warrior persona directives and `[QUESTIONS]` output blocks.
-  - Calls `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={API_KEY}`.
-  - Parses response into text and follow-up deduction questions identical to backend response schema.
+1. **`src/utils/geminiClient.ts`**:
+   - Export `generateGeminiDirectTTS(text, voiceName, apiKey)` to generate binary WAV speech from `gemini-3.8-flash-lite-tts`.
+2. **`src/App.tsx`**:
+   - Implement `startClientDirectVoiceLoop()` with `SpeechRecognition` or `webkitSpeechRecognition`.
+   - Update `connectToLiveAPI()` so if WebSocket fails to connect within 2.5s or fires `onerror`/`onclose`, it seamlessly routes into `startClientDirectVoiceLoop()`.
+   - Handle continuous loop state transitions (`listening` -> `thinking` -> `speaking` -> `listening`).
 
 ---
 
 ## 5. Verification & Testing Plan
 
-1. **Auth Screen Validation**: Verify that the Sign Up form displays the API Key input right below the Username field with mask/unmask, paste shortcut, and AI Studio link.
-2. **Mandatory Key Enforcement**: Verify that submitting without an API key blocks submission with a clear error prompt.
-3. **Key Connectivity Probe**: Test with valid and invalid Gemini API keys to verify inline feedback.
-4. **Vercel/Netlify Simulation (Standalone Mode)**: Test chat execution when server endpoints are bypassed, verifying that the client-direct runner delivers responses from Gemini smoothly.
-5. **Key Management Modal**: Test changing the key from the top bar settings modal and ensure new chats use the updated key.
-6. **Build Verification**: Run `compile_applet` to guarantee complete TypeScript compilation without errors.
+1. **Vercel/Netlify Simulation**: Verify that when WebSocket fails or is blocked, the app automatically switches to the Direct Client Voice Loop without crashing.
+2. **Speech Recognition Test**: Verify that spoken input in Hindi and English is transcribed cleanly.
+3. **Gemini TTS Test**: Verify that audio generates from `gemini-3.8-flash-lite-tts` with `Zephyr` (Bell) and `Charon` (Black).
+4. **Turn-Taking Verification**: Verify that after the companion finishes speaking, the microphone re-opens automatically for the next query.
+5. **Compilation Verification**: Run `compile_applet` and `lint_applet` to ensure zero build errors.

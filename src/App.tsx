@@ -9,7 +9,7 @@ import { SearchKnowledgeModal } from './components/SearchKnowledgeModal';
 import { BellVideoScreen } from './components/BellVideoScreen';
 import { AdminVideoSettings } from './components/AdminVideoSettings';
 import { ApiKeyModal } from './components/ApiKeyModal';
-import { callDirectGeminiChat } from './utils/geminiClient';
+import { callDirectGeminiChat, generateGeminiDirectTTS } from './utils/geminiClient';
 
 type Message = { 
   id?: string;
@@ -1886,6 +1886,228 @@ export default function App() {
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const hasOpenedAppInBackgroundRef = useRef<boolean>(false);
 
+  // Direct Client-Side Voice Engine Refs for Vercel & Netlify standalone deployment
+  const speechRecognitionRef = useRef<any>(null);
+  const isDirectVoiceActiveRef = useRef<boolean>(false);
+  const isDirectAiRespondingRef = useRef<boolean>(false);
+  const silenceTimerRef = useRef<any>(null);
+  const currentDirectAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const speakWithBrowserVoice = (text: string, onEnded?: () => void) => {
+    if (!('speechSynthesis' in window)) {
+      if (onEnded) onEnded();
+      return;
+    }
+    try {
+      window.speechSynthesis.cancel();
+      const cleanText = text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      const voices = window.speechSynthesis.getVoices();
+      
+      let chosenVoice = null;
+      if (personality === 'black') {
+        chosenVoice = voices.find(v => 
+          (v.name.toLowerCase().includes('male') || v.name.toLowerCase().includes('david') || v.name.toLowerCase().includes('george') || v.name.toLowerCase().includes('guy') || v.name.toLowerCase().includes('rishi')) && !v.name.toLowerCase().includes('female')
+        ) || voices.find(v => v.lang.startsWith('hi')) || voices[0];
+        utterance.pitch = 0.8;
+        utterance.rate = 1.0;
+      } else {
+        chosenVoice = voices.find(v => 
+          (v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('zira') || v.name.toLowerCase().includes('samantha'))
+        ) || voices.find(v => v.lang.startsWith('hi')) || voices[0];
+        utterance.pitch = 1.1;
+        utterance.rate = 1.05;
+      }
+      if (chosenVoice) utterance.voice = chosenVoice;
+      
+      utterance.onstart = () => {
+        setIsAiSpeaking(true);
+      };
+      utterance.onend = () => {
+        setIsAiSpeaking(false);
+        if (onEnded) onEnded();
+      };
+      utterance.onerror = () => {
+        setIsAiSpeaking(false);
+        if (onEnded) onEnded();
+      };
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      console.warn("Browser speech synthesis error:", e);
+      setIsAiSpeaking(false);
+      if (onEnded) onEnded();
+    }
+  };
+
+  const startClientDirectVoiceLoop = async () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setError("Speech recognition is not supported in this browser. Please use Chrome, Edge, Safari, or Android Chrome.");
+      setIsConnecting(false);
+      isConnectingRef.current = false;
+      return;
+    }
+
+    try {
+      if (speechRecognitionRef.current) {
+        try { speechRecognitionRef.current.abort(); } catch (e) {}
+        speechRecognitionRef.current = null;
+      }
+
+      setError(null);
+      setIsConnecting(false);
+      isConnectingRef.current = false;
+      setIsConnected(true);
+      setIsRecording(true);
+      isRecordingRef.current = true;
+      setNetworkStatus('stable');
+      isDirectVoiceActiveRef.current = true;
+      isDirectAiRespondingRef.current = false;
+
+      const recognition = new SpeechRecognition();
+      speechRecognitionRef.current = recognition;
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'hi-IN'; // Works great for Hindi, Hinglish, and English!
+
+      setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
+
+      recognition.onstart = () => {
+        setIsConnected(true);
+        setIsRecording(true);
+        setNetworkStatus('stable');
+        setError(null);
+      };
+
+      recognition.onresult = (event: any) => {
+        if (isDirectAiRespondingRef.current) return;
+
+        let interim = '';
+        let final = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            final += event.results[i][0].transcript;
+          } else {
+            interim += event.results[i][0].transcript;
+          }
+        }
+
+        const userSpoken = (final || interim).trim();
+        if (userSpoken) {
+          setVoiceTranscription(userSpoken);
+
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = setTimeout(async () => {
+            if (isDirectAiRespondingRef.current || !isDirectVoiceActiveRef.current) return;
+            isDirectAiRespondingRef.current = true;
+            try {
+              recognition.stop();
+            } catch (e) {}
+
+            const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || '';
+            if (!activeKey) {
+              setError("Please configure your Gemini API Key in the top header to use voice conversation.");
+              isDirectAiRespondingRef.current = false;
+              return;
+            }
+
+            try {
+              setVoiceTranscription('Thinking... 🤔');
+              const result = await callDirectGeminiChat({
+                messages: [{ role: 'user', content: userSpoken }],
+                personality,
+                apiKey: activeKey,
+                userName: currentUser?.username || 'User',
+                isAdmin: currentUser?.email === 'sy5455977@gmail.com'
+              });
+
+              const replyText = result.text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
+              setVoiceTranscription(replyText);
+              setIsAiSpeaking(true);
+
+              const voiceName = personality === 'black' ? 'Charon' : 'Zephyr';
+              let ttsSucceeded = false;
+              try {
+                const base64Audio = await generateGeminiDirectTTS(replyText, voiceName, activeKey);
+                if (base64Audio) {
+                  const audio = new Audio(`data:audio/wav;base64,${base64Audio}`);
+                  currentDirectAudioRef.current = audio;
+
+                  const handleAudioFinished = () => {
+                    setIsAiSpeaking(false);
+                    isDirectAiRespondingRef.current = false;
+                    currentDirectAudioRef.current = null;
+                    if (isDirectVoiceActiveRef.current && mode === 'voice') {
+                      setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
+                      try { recognition.start(); } catch (e) {}
+                    }
+                  };
+
+                  audio.onended = handleAudioFinished;
+                  audio.onerror = () => {
+                    speakWithBrowserVoice(replyText, () => {
+                      setIsAiSpeaking(false);
+                      isDirectAiRespondingRef.current = false;
+                      if (isDirectVoiceActiveRef.current && mode === 'voice') {
+                        setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
+                        try { recognition.start(); } catch (e) {}
+                      }
+                    });
+                  };
+
+                  await audio.play();
+                  ttsSucceeded = true;
+                }
+              } catch (ttsErr) {
+                console.warn("[Voice Direct] Gemini TTS failed, using browser speech synthesis:", ttsErr);
+              }
+
+              if (!ttsSucceeded) {
+                speakWithBrowserVoice(replyText, () => {
+                  setIsAiSpeaking(false);
+                  isDirectAiRespondingRef.current = false;
+                  if (isDirectVoiceActiveRef.current && mode === 'voice') {
+                    setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
+                    try { recognition.start(); } catch (e) {}
+                  }
+                });
+              }
+            } catch (queryErr: any) {
+              console.error("[Voice Direct] AI generation error:", queryErr);
+              setError(queryErr?.message || "Failed to generate voice response.");
+              isDirectAiRespondingRef.current = false;
+              if (isDirectVoiceActiveRef.current && mode === 'voice') {
+                try { recognition.start(); } catch (e) {}
+              }
+            }
+          }, 1200);
+        }
+      };
+
+      recognition.onerror = (e: any) => {
+        if (e.error === 'no-speech' || e.error === 'aborted') {
+          return;
+        }
+        console.warn("[SpeechRecognition error]:", e);
+      };
+
+      recognition.onend = () => {
+        if (isDirectVoiceActiveRef.current && !isDirectAiRespondingRef.current && mode === 'voice') {
+          try {
+            recognition.start();
+          } catch (e) {}
+        }
+      };
+
+      recognition.start();
+    } catch (err: any) {
+      console.warn("Direct speech recognition failed to start:", err);
+      setError(err?.message || "Could not start voice recognition.");
+      setIsConnecting(false);
+      isConnectingRef.current = false;
+    }
+  };
+
   // Existing Voice API Logic
   const handleUnintentionalDisconnect = () => {
     if (intentionalDisconnectRef.current) {
@@ -1955,7 +2177,18 @@ export default function App() {
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
+      let hasEstablished = false;
+      const wsConnectTimeout = setTimeout(() => {
+        if (!hasEstablished) {
+          console.info("[Deployment Mode] WebSocket connection timeout (Vercel/Netlify). Switching to Automatic Client-Direct Voice Engine...");
+          try { ws.close(); } catch (e) {}
+          startClientDirectVoiceLoop();
+        }
+      }, 2000);
+
       ws.onopen = async () => {
+        hasEstablished = true;
+        clearTimeout(wsConnectTimeout);
         setIsConnected(true);
         setIsRecording(true);
         isRecordingRef.current = true;
@@ -2137,6 +2370,12 @@ export default function App() {
       };
 
       ws.onerror = () => {
+        clearTimeout(wsConnectTimeout);
+        if (!hasEstablished) {
+          console.info("[Deployment Mode] WebSocket failed to connect (Vercel/Netlify detected). Activating Automatic Client-Direct Voice Engine...");
+          startClientDirectVoiceLoop();
+          return;
+        }
         console.log("WebSocket error triggered.");
         setIsConnecting(false);
         isConnectingRef.current = false;
@@ -2144,17 +2383,20 @@ export default function App() {
       };
       
       ws.onclose = () => {
+        clearTimeout(wsConnectTimeout);
+        if (!hasEstablished) {
+          console.info("[Deployment Mode] WebSocket closed before connect (Vercel/Netlify detected). Activating Automatic Client-Direct Voice Engine...");
+          startClientDirectVoiceLoop();
+          return;
+        }
         console.log("WebSocket connection closed.");
         setIsConnecting(false);
         isConnectingRef.current = false;
         handleUnintentionalDisconnect();
       };
     } catch(err) {
-       console.error(err);
-       setError("Connection failed.");
-       setIsConnecting(false);
-       isConnectingRef.current = false;
-       handleUnintentionalDisconnect();
+       console.info("[Deployment Mode] WebSocket exception. Activating Automatic Client-Direct Voice Engine...", err);
+       startClientDirectVoiceLoop();
     }
   };
 
@@ -2489,6 +2731,31 @@ export default function App() {
   };
 
   const disconnect = (isUnintentional = false) => {
+    // Teardown Direct Voice Loop (Vercel & Netlify)
+    isDirectVoiceActiveRef.current = false;
+    isDirectAiRespondingRef.current = false;
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    if (speechRecognitionRef.current) {
+      try {
+        speechRecognitionRef.current.abort();
+      } catch (e) {}
+      speechRecognitionRef.current = null;
+    }
+    if (currentDirectAudioRef.current) {
+      try {
+        currentDirectAudioRef.current.pause();
+      } catch (e) {}
+      currentDirectAudioRef.current = null;
+    }
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch (e) {}
+    }
+
     stopVision();
     setIsConnected(false);
     setIsAiSpeaking(false);
@@ -2544,6 +2811,13 @@ export default function App() {
 
   const toggleConnection = () => {
     if (isConnectingRef.current) return; // Ignore toggles during transit connecting
+
+    if (isDirectVoiceActiveRef.current) {
+      // Toggle direct voice loop pause or disconnect
+      intentionalDisconnectRef.current = true;
+      disconnect();
+      return;
+    }
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       intentionalDisconnectRef.current = true;

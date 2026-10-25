@@ -114,8 +114,8 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
     throw new Error('No messages provided to Gemini');
   }
 
-  // Ultra-fast responsive models
-  const models = ['gemini-3.1-flash-lite', 'gemini-2.5-flash'];
+  // Ultra-fast responsive models (gemini-2.5-flash is universally available across all API keys)
+  const models = ['gemini-2.5-flash', 'gemini-flash-latest'];
   let lastError: any = null;
 
   for (const model of models) {
@@ -132,7 +132,7 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
         },
         generationConfig: {
           temperature: 0.7,
-          maxOutputTokens: isVoiceMode ? 250 : 1000
+          maxOutputTokens: isVoiceMode ? 200 : 1000
         }
       };
 
@@ -180,6 +180,10 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
   throw lastError || new Error('Failed to generate response from Gemini API');
 }
 
+// Track whether Gemini REST TTS is supported on the user's key to prevent repeated 404 delays
+let hasCheckedTtsSupport = false;
+let isTtsSupportedOnKey = true;
+
 // Direct client-side Gemini TTS generator for Bell & Black voices on Vercel and Netlify
 export async function generateGeminiDirectTTS(
   text: string,
@@ -189,48 +193,59 @@ export async function generateGeminiDirectTTS(
 ): Promise<string | null> {
   const cleanKey = apiKey.trim();
   if (!cleanKey || !text.trim() || signal?.aborted) return null;
+  if (hasCheckedTtsSupport && !isTtsSupportedOnKey) return null;
 
   // Clean out any questions marker or heavy punctuation before speaking
   const speechText = text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
   if (!speechText) return null;
 
-  const ttsModels = ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts'];
+  try {
+    // 1200ms strict timeout to avoid voice lag
+    const timeoutController = new AbortController();
+    const timer = setTimeout(() => timeoutController.abort(), 1200);
 
-  for (const model of ttsModels) {
-    if (signal?.aborted) return null;
+    const onParentAbort = () => timeoutController.abort();
+    if (signal) signal.addEventListener('abort', onParentAbort);
 
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: speechText }] }],
-          generationConfig: {
-            responseModalities: ["AUDIO"],
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: { voiceName }
-              }
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite-tts:generateContent?key=${cleanKey}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: speechText }] }],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName }
             }
           }
-        }),
-        signal
-      });
+        }
+      }),
+      signal: timeoutController.signal
+    }).finally(() => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onParentAbort);
+    });
 
-      if (!res.ok) continue;
-
-      const data = await res.json();
-      const base64Audio = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      if (base64Audio) {
-        return base64Audio;
-      }
-    } catch (e: any) {
-      if (e?.name === 'AbortError' || signal?.aborted) {
-        return null;
-      }
-      console.warn(`[Client TTS] ${model} failed, trying next fallback:`, e);
+    hasCheckedTtsSupport = true;
+    if (!res.ok) {
+      isTtsSupportedOnKey = false;
+      return null;
     }
+
+    const data = await res.json();
+    const base64Audio = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (base64Audio) {
+      isTtsSupportedOnKey = true;
+      return base64Audio;
+    }
+  } catch (e: any) {
+    if (e?.name === 'AbortError' && signal?.aborted) {
+      return null;
+    }
+    hasCheckedTtsSupport = true;
+    isTtsSupportedOnKey = false;
   }
 
   return null;

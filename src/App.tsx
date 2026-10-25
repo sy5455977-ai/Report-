@@ -1891,6 +1891,7 @@ export default function App() {
   const voiceStateRef = useRef<VoiceMachineState>('idle');
   const speechRecognitionRef = useRef<any>(null);
   const isDirectVoiceActiveRef = useRef<boolean>(false);
+  const isStartingDirectVoiceRef = useRef<boolean>(false);
   const silenceTimerRef = useRef<any>(null);
   const speechGracePeriodTimerRef = useRef<any>(null);
   const currentDirectAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -1898,6 +1899,7 @@ export default function App() {
   const directAudioContextRef = useRef<AudioContext | null>(null);
   const directCurrentSourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
   const directVoiceHistoryRef = useRef<Array<{ role: 'user' | 'ai'; content: string }>>([]);
+  const currentTurnSpeechRef = useRef<string>('');
 
   // Comprehensive immediate cancellation of all audio sources
   const stopAllVoicePlayback = () => {
@@ -1996,43 +1998,73 @@ export default function App() {
   };
 
   const speakWithBrowserVoice = (text: string, onEnded?: () => void) => {
-    if (!('speechSynthesis' in window)) {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
       if (onEnded) onEnded();
       return;
     }
     try {
       stopAllVoicePlayback();
+
+      // Mobile Chrome unfreeze
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.resume();
+
       const cleanText = text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
-      const utterance = new SpeechSynthesisUtterance(cleanText);
-      const voices = window.speechSynthesis.getVoices();
-      
-      let chosenVoice = null;
-      if (personality === 'black') {
-        chosenVoice = voices.find(v => 
-          (v.name.toLowerCase().includes('male') || v.name.toLowerCase().includes('david') || v.name.toLowerCase().includes('george') || v.name.toLowerCase().includes('guy') || v.name.toLowerCase().includes('rishi')) && !v.name.toLowerCase().includes('female')
-        ) || voices.find(v => v.lang.startsWith('hi')) || voices[0];
-        utterance.pitch = 0.85;
-        utterance.rate = 1.0;
-      } else {
-        chosenVoice = voices.find(v => 
-          (v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('zira') || v.name.toLowerCase().includes('samantha'))
-        ) || voices.find(v => v.lang.startsWith('hi')) || voices[0];
-        utterance.pitch = 1.05;
-        utterance.rate = 1.05;
+      if (!cleanText) {
+        if (onEnded) onEnded();
+        return;
       }
-      if (chosenVoice) utterance.voice = chosenVoice;
-      
+
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      utterance.lang = 'hi-IN';
+
+      const voices = window.speechSynthesis.getVoices();
+      if (voices && voices.length > 0) {
+        if (personality === 'black') {
+          const maleVoice = voices.find(v => 
+            (v.name.toLowerCase().includes('male') || v.name.toLowerCase().includes('david') || v.name.toLowerCase().includes('george') || v.name.toLowerCase().includes('guy') || v.name.toLowerCase().includes('rishi')) && !v.name.toLowerCase().includes('female')
+          ) || voices.find(v => v.lang.startsWith('hi')) || voices[0];
+          if (maleVoice) utterance.voice = maleVoice;
+          utterance.pitch = 0.85;
+          utterance.rate = 1.0;
+        } else {
+          const femaleVoice = voices.find(v => 
+            (v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('zira') || v.name.toLowerCase().includes('samantha'))
+          ) || voices.find(v => v.lang.startsWith('hi')) || voices[0];
+          if (femaleVoice) utterance.voice = femaleVoice;
+          utterance.pitch = 1.05;
+          utterance.rate = 1.05;
+        }
+      }
+
+      let hasFinished = false;
+      const finish = () => {
+        if (hasFinished) return;
+        hasFinished = true;
+        setIsAiSpeaking(false);
+        if (onEnded) onEnded();
+      };
+
       utterance.onstart = () => {
         setIsAiSpeaking(true);
       };
       utterance.onend = () => {
-        setIsAiSpeaking(false);
-        if (onEnded) onEnded();
+        finish();
       };
-      utterance.onerror = () => {
-        setIsAiSpeaking(false);
-        if (onEnded) onEnded();
+      utterance.onerror = (e) => {
+        console.warn("[SpeechSynthesis] Utterance error:", e);
+        finish();
       };
+
+      // Keep mobile Android synthesis alive
+      const keepAlive = setInterval(() => {
+        if (window.speechSynthesis.speaking) {
+          window.speechSynthesis.resume();
+        } else {
+          clearInterval(keepAlive);
+        }
+      }, 3000);
+
       window.speechSynthesis.speak(utterance);
     } catch (e) {
       console.warn("Browser speech synthesis error:", e);
@@ -2042,16 +2074,21 @@ export default function App() {
   };
 
   const startClientDirectVoiceLoop = async () => {
+    if (isStartingDirectVoiceRef.current) {
+      return;
+    }
+    isStartingDirectVoiceRef.current = true;
+
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
       setError("Speech recognition is not supported in this browser. Please use Chrome, Edge, Safari, or Android Chrome.");
       setIsConnecting(false);
       isConnectingRef.current = false;
+      isStartingDirectVoiceRef.current = false;
       return;
     }
 
     try {
-      // Abort any existing recognition and audio instance
       if (speechRecognitionRef.current) {
         try { speechRecognitionRef.current.abort(); } catch (e) {}
         speechRecognitionRef.current = null;
@@ -2070,6 +2107,13 @@ export default function App() {
         speechGracePeriodTimerRef.current = null;
       }
 
+      // Pre-warm mobile speech synthesis
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        try {
+          window.speechSynthesis.resume();
+        } catch (e) {}
+      }
+
       setError(null);
       setIsConnecting(false);
       isConnectingRef.current = false;
@@ -2079,12 +2123,13 @@ export default function App() {
       setNetworkStatus('stable');
       isDirectVoiceActiveRef.current = true;
       voiceStateRef.current = 'listening';
+      currentTurnSpeechRef.current = '';
 
       const recognition = new SpeechRecognition();
       speechRecognitionRef.current = recognition;
       recognition.continuous = true;
       recognition.interimResults = true;
-      recognition.lang = 'hi-IN'; // Works seamlessly for Hindi, Hinglish, and English
+      recognition.lang = 'hi-IN';
 
       setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
 
@@ -2094,15 +2139,111 @@ export default function App() {
         }
         try {
           recognition.start();
-        } catch (e: any) {
-          // If already started or aborting, ignore silently to prevent duplicate chime
-        }
+        } catch (e: any) {}
       };
 
       const safeStopListening = () => {
         try {
           recognition.abort();
         } catch (e) {}
+      };
+
+      // Turn response executor - called on silence debounce or onend
+      const executeTurnResponse = async () => {
+        const speechToProcess = currentTurnSpeechRef.current.trim();
+        if (speechToProcess.length < 2) return;
+        if (voiceStateRef.current !== 'listening' || !isDirectVoiceActiveRef.current) return;
+
+        voiceStateRef.current = 'processing';
+        safeStopListening();
+        currentTurnSpeechRef.current = '';
+
+        const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || '';
+        if (!activeKey) {
+          setError("Please configure your Gemini API Key in the top header to use voice conversation.");
+          voiceStateRef.current = 'listening';
+          safeStartListening();
+          return;
+        }
+
+        const abortController = new AbortController();
+        directVoiceAbortControllerRef.current = abortController;
+
+        try {
+          setVoiceTranscription('Thinking... 🤔');
+
+          directVoiceHistoryRef.current.push({ role: 'user', content: speechToProcess });
+          if (directVoiceHistoryRef.current.length > 8) {
+            directVoiceHistoryRef.current = directVoiceHistoryRef.current.slice(-8);
+          }
+
+          const result = await callDirectGeminiChat({
+            messages: directVoiceHistoryRef.current,
+            personality,
+            apiKey: activeKey,
+            userName: currentUser?.username || 'User',
+            isAdmin: currentUser?.email === 'sy5455977@gmail.com',
+            isVoiceMode: true,
+            signal: abortController.signal
+          });
+
+          if (abortController.signal.aborted) return;
+
+          const rawReply = result.text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
+          const replyText = rawReply || (personality === 'black' ? 'Bilkul janab, main samajh gaya.' : 'Haan, bolo na!');
+
+          directVoiceHistoryRef.current.push({ role: 'ai', content: replyText });
+          if (directVoiceHistoryRef.current.length > 8) {
+            directVoiceHistoryRef.current = directVoiceHistoryRef.current.slice(-8);
+          }
+
+          setVoiceTranscription(replyText);
+
+          const handleVoiceCompleted = () => {
+            if (abortController.signal.aborted) return;
+            stopAllVoicePlayback();
+            voiceStateRef.current = 'listening';
+
+            if (speechGracePeriodTimerRef.current) clearTimeout(speechGracePeriodTimerRef.current);
+            speechGracePeriodTimerRef.current = setTimeout(() => {
+              if (voiceStateRef.current === 'listening' && isDirectVoiceActiveRef.current && mode === 'voice') {
+                setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
+                currentTurnSpeechRef.current = '';
+                safeStartListening();
+              }
+            }, 200);
+          };
+
+          voiceStateRef.current = 'speaking';
+
+          const voiceName = personality === 'black' ? 'Charon' : 'Zephyr';
+          let ttsAudioPlayed = false;
+
+          try {
+            const base64Audio = await generateGeminiDirectTTS(replyText, voiceName, activeKey, abortController.signal);
+            if (base64Audio && !abortController.signal.aborted) {
+              const played = await playBase64WavInWebAudio(base64Audio, handleVoiceCompleted);
+              ttsAudioPlayed = played;
+            }
+          } catch (ttsErr: any) {
+            if (ttsErr?.name === 'AbortError') return;
+            console.warn("[Voice Direct] TTS unavailable, using browser speech synthesis:", ttsErr);
+          }
+
+          if (!ttsAudioPlayed && !abortController.signal.aborted) {
+            speakWithBrowserVoice(replyText, handleVoiceCompleted);
+          }
+        } catch (queryErr: any) {
+          if (queryErr?.name === 'AbortError' || abortController.signal.aborted) {
+            return;
+          }
+          console.error("[Voice Direct] AI generation error:", queryErr);
+          setError(queryErr?.message || "Failed to generate voice response.");
+          voiceStateRef.current = 'listening';
+          if (isDirectVoiceActiveRef.current && mode === 'voice') {
+            safeStartListening();
+          }
+        }
       };
 
       recognition.onstart = () => {
@@ -2113,7 +2254,7 @@ export default function App() {
       };
 
       recognition.onresult = (event: any) => {
-        // Instant Barge-In: If user speaks while AI is speaking or processing, immediately cancel AI playback!
+        // Barge-in: User speaks while AI is speaking
         if (voiceStateRef.current === 'speaking' || voiceStateRef.current === 'processing') {
           stopAllVoicePlayback();
           if (directVoiceAbortControllerRef.current) {
@@ -2121,129 +2262,28 @@ export default function App() {
             directVoiceAbortControllerRef.current = null;
           }
           voiceStateRef.current = 'listening';
+          currentTurnSpeechRef.current = '';
         }
 
-        let interim = '';
-        let final = '';
+        let fullAccumulated = '';
         let hasFinalResult = false;
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            final += event.results[i][0].transcript;
-            hasFinalResult = true;
-          } else {
-            interim += event.results[i][0].transcript;
+        for (let i = 0; i < event.results.length; ++i) {
+          const item = event.results[i];
+          if (item && item[0]) {
+            fullAccumulated += item[0].transcript + ' ';
+            if (item.isFinal) hasFinalResult = true;
           }
         }
 
-        const userSpoken = (final || interim).trim();
-        if (userSpoken) {
-          setVoiceTranscription(userSpoken);
+        const text = fullAccumulated.trim();
+        if (text) {
+          currentTurnSpeechRef.current = text;
+          setVoiceTranscription(text);
 
-          // Adaptive silence threshold: 750ms if finalized sentence, 900ms if intermediate pause (balanced 800ms average)
-          const pauseThreshold = hasFinalResult ? 750 : 900;
+          const pauseThreshold = hasFinalResult ? 550 : 800;
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-
-          silenceTimerRef.current = setTimeout(async () => {
-            if (voiceStateRef.current !== 'listening' || !isDirectVoiceActiveRef.current) return;
-
-            // Discard negligible noise, clicks, or single punctuation
-            if (userSpoken.length < 2) return;
-
-            // Transition strictly to 'processing'
-            voiceStateRef.current = 'processing';
-            // Stop mic recognition to prevent hearing speaker output or Android chime loop
-            safeStopListening();
-
-            const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || '';
-            if (!activeKey) {
-              setError("Please configure your Gemini API Key in the top header to use voice conversation.");
-              voiceStateRef.current = 'listening';
-              safeStartListening();
-              return;
-            }
-
-            const abortController = new AbortController();
-            directVoiceAbortControllerRef.current = abortController;
-
-            try {
-              setVoiceTranscription('Thinking... 🤔');
-
-              // Append user message to contextual voice history (prevents topic bleeding)
-              directVoiceHistoryRef.current.push({ role: 'user', content: userSpoken });
-              if (directVoiceHistoryRef.current.length > 8) {
-                directVoiceHistoryRef.current = directVoiceHistoryRef.current.slice(-8);
-              }
-
-              const result = await callDirectGeminiChat({
-                messages: directVoiceHistoryRef.current,
-                personality,
-                apiKey: activeKey,
-                userName: currentUser?.username || 'User',
-                isAdmin: currentUser?.email === 'sy5455977@gmail.com',
-                isVoiceMode: true,
-                signal: abortController.signal
-              });
-
-              if (abortController.signal.aborted) return;
-
-              const rawReply = result.text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
-              const replyText = rawReply || (personality === 'black' ? 'Bilkul janab, main samajh gaya.' : 'Haan, bolo na!');
-
-              // Append AI response to context history
-              directVoiceHistoryRef.current.push({ role: 'ai', content: replyText });
-              if (directVoiceHistoryRef.current.length > 8) {
-                directVoiceHistoryRef.current = directVoiceHistoryRef.current.slice(-8);
-              }
-
-              setVoiceTranscription(replyText);
-
-              // Voice playback completion handler
-              const handleVoiceCompleted = () => {
-                if (abortController.signal.aborted) return;
-                stopAllVoicePlayback();
-                voiceStateRef.current = 'listening';
-
-                // 250ms room silence grace period before opening mic, eliminating room echo feedback
-                if (speechGracePeriodTimerRef.current) clearTimeout(speechGracePeriodTimerRef.current);
-                speechGracePeriodTimerRef.current = setTimeout(() => {
-                  if (voiceStateRef.current === 'listening' && isDirectVoiceActiveRef.current && mode === 'voice') {
-                    setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
-                    safeStartListening();
-                  }
-                }, 250);
-              };
-
-              // Transition state to 'speaking'
-              voiceStateRef.current = 'speaking';
-
-              const voiceName = personality === 'black' ? 'Charon' : 'Zephyr';
-              let ttsAudioPlayed = false;
-
-              try {
-                const base64Audio = await generateGeminiDirectTTS(replyText, voiceName, activeKey, abortController.signal);
-                if (base64Audio && !abortController.signal.aborted) {
-                  const played = await playBase64WavInWebAudio(base64Audio, handleVoiceCompleted);
-                  ttsAudioPlayed = played;
-                }
-              } catch (ttsErr: any) {
-                if (ttsErr?.name === 'AbortError') return;
-                console.warn("[Voice Direct] Gemini TTS failed, using browser speech synthesis:", ttsErr);
-              }
-
-              if (!ttsAudioPlayed && !abortController.signal.aborted) {
-                speakWithBrowserVoice(replyText, handleVoiceCompleted);
-              }
-            } catch (queryErr: any) {
-              if (queryErr?.name === 'AbortError' || abortController.signal.aborted) {
-                return;
-              }
-              console.error("[Voice Direct] AI generation error:", queryErr);
-              setError(queryErr?.message || "Failed to generate voice response.");
-              voiceStateRef.current = 'listening';
-              if (isDirectVoiceActiveRef.current && mode === 'voice') {
-                safeStartListening();
-              }
-            }
+          silenceTimerRef.current = setTimeout(() => {
+            executeTurnResponse();
           }, pauseThreshold);
         }
       };
@@ -2256,9 +2296,17 @@ export default function App() {
       };
 
       recognition.onend = () => {
-        // ONLY restart if explicitly in 'listening' state!
-        // Prevents the Android "tu-tu-tu" mic churn during processing or speaking
-        if (isDirectVoiceActiveRef.current && voiceStateRef.current === 'listening' && mode === 'voice') {
+        if (!isDirectVoiceActiveRef.current || mode !== 'voice') return;
+
+        // If user already spoke and speech ended on Android, trigger immediately with 0 delay!
+        if (voiceStateRef.current === 'listening' && currentTurnSpeechRef.current.trim().length >= 2) {
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          executeTurnResponse();
+          return;
+        }
+
+        // Only restart if still actively listening with no pending text
+        if (voiceStateRef.current === 'listening') {
           safeStartListening();
         }
       };
@@ -2270,6 +2318,8 @@ export default function App() {
       setIsConnecting(false);
       isConnectingRef.current = false;
       voiceStateRef.current = 'idle';
+    } finally {
+      isStartingDirectVoiceRef.current = false;
     }
   };
 
@@ -2287,7 +2337,6 @@ export default function App() {
       return;
     }
 
-    // Perform quiet cleanup of previous connection handles to prevent leaks
     disconnect(true);
 
     if (reconnectAttemptsRef.current < 5) {
@@ -2296,16 +2345,12 @@ export default function App() {
       setError(`Network unstable. Reconnecting (Attempt ${reconnectAttemptsRef.current}/5)...`);
       
       const delay = Math.min(1000 * reconnectAttemptsRef.current, 5000);
-      console.log(`[Voice] Network issue. Auto-reconnecting (Attempt ${reconnectAttemptsRef.current}/5) in ${delay}ms...`);
-      
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = setTimeout(() => {
         if (intentionalDisconnectRef.current || mode !== 'voice') return;
-        console.log(`[Voice] Executing auto-reconnect attempt ${reconnectAttemptsRef.current}...`);
         connectToLiveAPI();
       }, delay);
     } else {
-      console.log("[Voice] Exceeded maximum reconnect attempts. Going offline.");
       reconnectAttemptsRef.current = 0;
       setNetworkStatus('offline');
       setError("Connection failed. Weak or slow internet connection. Tap button to retry.");
@@ -2318,18 +2363,32 @@ export default function App() {
       return;
     }
 
+    // Static & Jamstack deployment detection (Netlify, Vercel, Cloudflare Pages, GitHub Pages)
+    const isStaticDeploy = typeof window !== 'undefined' && (
+      window.location.hostname.includes('netlify.app') ||
+      window.location.hostname.includes('vercel.app') ||
+      window.location.hostname.includes('pages.dev') ||
+      window.location.hostname.includes('github.io') ||
+      (window.location.hostname !== 'localhost' && !window.location.hostname.includes('run.app'))
+    );
+
+    if (isStaticDeploy) {
+      console.info("[Deployment Mode] Static host (Netlify/Vercel) detected. Directly starting Client Voice Engine...");
+      startClientDirectVoiceLoop();
+      return;
+    }
+
     try {
       setError(null);
       setIsConnecting(true);
       isConnectingRef.current = true;
-      intentionalDisconnectRef.current = false; // Reset intentional flag upon connecting
+      intentionalDisconnectRef.current = false;
 
-      // Init Output context (GenAI response is 24kHz)
+      // Init Output context
       const outputAudioCtx = new AudioContext({ sampleRate: 24000 });
       outputAudioCtxRef.current = outputAudioCtx;
       nextStartTimeRef.current = outputAudioCtx.currentTime;
 
-      // Ensure AudioContext is resumed (browser policy)
       if (outputAudioCtx.state === 'suspended') {
         await outputAudioCtx.resume();
       }
@@ -2343,13 +2402,20 @@ export default function App() {
       wsRef.current = ws;
 
       let hasEstablished = false;
-      const wsConnectTimeout = setTimeout(() => {
-        if (!hasEstablished) {
-          console.info("[Deployment Mode] WebSocket connection timeout (Vercel/Netlify). Switching to Automatic Client-Direct Voice Engine...");
+      let hasTriggeredFallback = false;
+
+      const triggerFallbackOnce = () => {
+        if (!hasTriggeredFallback && !hasEstablished) {
+          hasTriggeredFallback = true;
+          clearTimeout(wsConnectTimeout);
           try { ws.close(); } catch (e) {}
           startClientDirectVoiceLoop();
         }
-      }, 2000);
+      };
+
+      const wsConnectTimeout = setTimeout(() => {
+        triggerFallbackOnce();
+      }, 1500);
 
       ws.onopen = async () => {
         hasEstablished = true;
@@ -2360,11 +2426,10 @@ export default function App() {
         setIsConnecting(false);
         isConnectingRef.current = false;
         setVoiceTranscription('');
-        
         setNetworkStatus('stable');
         reconnectAttemptsRef.current = 0;
+
         try {
-          // Init Input context (user mic is 16kHz) with echo cancellation and noise suppression
           const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
               echoCancellation: true,
@@ -2379,7 +2444,6 @@ export default function App() {
           }
           
           streamRef.current = stream;
-          
           const inputAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
           inputAudioCtxRef.current = inputAudioCtx;
           if (inputAudioCtx.state === 'suspended') {
@@ -2388,19 +2452,15 @@ export default function App() {
           
           const source = inputAudioCtx.createMediaStreamSource(stream);
           sourceRef.current = source;
-          
-          // 2048 samples = ~128ms per chunk for responsive low-latency streaming
           const processor = inputAudioCtx.createScriptProcessor(2048, 1, 1);
           processorRef.current = processor;
           
-          // Mute node prevents mic input from echoing through the local device speakers (eliminates local double voice)
           const muteNode = inputAudioCtx.createGain();
           muteNode.gain.value = 0;
           source.connect(processor);
           processor.connect(muteNode);
           muteNode.connect(inputAudioCtx.destination);
           
-          // Heartbeat interval to maintain active WebSocket connection over rural/low-bandwidth mobile networks
           const heartbeatInterval = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: "ping" }));
@@ -2411,40 +2471,25 @@ export default function App() {
 
           processor.onaudioprocess = (e) => {
             if (ws.readyState === WebSocket.OPEN && isRecordingRef.current) {
-              // Rural / Low-Internet Bandwidth protection: Allow healthy buffer headroom (512KB) so packets are not dropped on jitter
-              if (ws.bufferedAmount > 524288) {
-                return;
-              }
+              if (ws.bufferedAmount > 524288) return;
 
               const rawData = e.inputBuffer.getChannelData(0);
-              
-              // Calculate RMS (Root Mean Square) volume of this chunk
               let sum = 0;
               for (let i = 0; i < rawData.length; i++) {
                 sum += rawData[i] * rawData[i];
               }
               const rms = Math.sqrt(sum / rawData.length);
               
-              // Accurate check: AI is only speaking if playback is actively ongoing in audio context
               const currentAudioTime = outputAudioCtxRef.current?.currentTime || 0;
               const isAiSpeaking = activeSourcesRef.current.length > 0 && currentAudioTime < (nextStartTimeRef.current + 0.05);
 
-              // Auto-clear active sources if playback finished
               if (activeSourcesRef.current.length > 0 && currentAudioTime >= (nextStartTimeRef.current + 0.05)) {
                 activeSourcesRef.current = [];
                 setIsAiSpeaking(false);
               }
               
-              // When AI is speaking through device speaker:
-              // Browser hardware echo cancellation cleans echo.
-              // To avoid AI cutting itself off mid-sentence, NEVER stop active playback on raw low RMS!
-              // True barge-in is handled natively by Gemini Live API sending { interrupted: true }.
-              // While AI is speaking, gate low-level mic packets (RMS < 0.06) so speaker sound does not echo back into the model.
-              if (isAiSpeaking && rms < 0.06) {
-                return;
-              }
+              if (isAiSpeaking && rms < 0.06) return;
 
-              // Ensure downsampled 16kHz audio data is sent to Gemini Live API
               const downsampled = downsampleTo16k(rawData, inputAudioCtx.sampleRate);
               const base64 = pcmToBase64(downsampled);
               ws.send(JSON.stringify({ audio: base64 }));

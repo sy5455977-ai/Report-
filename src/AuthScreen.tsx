@@ -104,23 +104,62 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
       }
 
       // If server responded successfully, use server user data
-      if (serverSuccess && userData) {
-        onLogin(userData);
-        return;
-      }
-
-      // If on Vercel/Netlify static host (or backend unavailable), authenticate client-side directly!
-      const fallbackUsername = username || email.split('@')[0] || 'User';
-      const fallbackUser = {
+      const activeUserRecord = (serverSuccess && userData) ? userData : {
         email: email.trim().toLowerCase(),
-        username: fallbackUsername,
+        username: username || email.split('@')[0] || 'User',
         isAdmin: email.trim().toLowerCase() === 'sy5455977@gmail.com',
         apiKey: trimmedApiKey,
         sessionToken: `local_session_${Date.now()}_${Math.random().toString(36).substring(2)}`
       };
 
-      localStorage.setItem('blackbell_user', JSON.stringify(fallbackUser));
-      onLogin(fallbackUser);
+      try {
+        const savedUsersRaw = localStorage.getItem('blackbell_registered_users');
+        let userList = savedUsersRaw ? JSON.parse(savedUsersRaw) : [];
+        if (!Array.isArray(userList)) userList = [];
+
+        // Ensure default admin is present
+        if (!userList.some((u: any) => u.email === 'sy5455977@gmail.com')) {
+          userList.unshift({
+            id: 'admin_sys',
+            email: 'sy5455977@gmail.com',
+            username: 'Blackbell Admin',
+            isAdmin: true,
+            isBanned: false,
+            createdAt: Date.now() - 86400000 * 7,
+            lastSeen: Date.now(),
+            role: 'admin',
+            messagesCount: 24,
+            sessionsCount: 3
+          });
+        }
+
+        const idx = userList.findIndex((u: any) => u.email.toLowerCase() === activeUserRecord.email.toLowerCase());
+        const userObj = {
+          id: activeUserRecord.id || `user_${Date.now()}`,
+          email: activeUserRecord.email,
+          username: activeUserRecord.username,
+          isAdmin: activeUserRecord.isAdmin,
+          isBanned: false,
+          createdAt: activeUserRecord.createdAt || Date.now(),
+          lastSeen: Date.now(),
+          role: activeUserRecord.isAdmin ? 'admin' : 'user',
+          messagesCount: 1,
+          sessionsCount: 1
+        };
+
+        if (idx >= 0) {
+          userList[idx] = { ...userList[idx], lastSeen: Date.now() };
+        } else {
+          userList.push(userObj);
+        }
+        localStorage.setItem('blackbell_registered_users', JSON.stringify(userList));
+      } catch (e) {
+        console.warn("Could not cache registered user in localStorage:", e);
+      }
+
+      localStorage.setItem('blackbell_user', JSON.stringify(activeUserRecord));
+      onLogin(activeUserRecord);
+      return;
 
     } catch (err: any) {
       console.error(err);

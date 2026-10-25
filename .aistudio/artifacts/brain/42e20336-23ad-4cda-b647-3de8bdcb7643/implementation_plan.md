@@ -1,125 +1,27 @@
-# Blackbell Voice Model Architecture & Reliability Engine
+# Blackbell Voice Model & Deployment Engine: Comprehensive Fixes
 
-Comprehensive architectural overhaul of Blackbell's real-time Voice Model across Mobile, Netlify, and Vercel environments. Resolves microphone detection dropouts, overlapping duplicate audio, Android speech recognition chime loops ("tu-tu-tu"), acoustic feedback loops, late responses, and topic bleeding without changing existing UI styling or video personas.
+All reported Voice Model issues and Admin Panel persistence on **Netlify and Vercel** have been resolved cleanly with full backwards-compatibility.
 
-## User Review & Critical Decisions
+## Completed Technical Solutions
 
-> [!IMPORTANT]
-> The following architectural parameters have been confirmed by user selection:
-> - **Audio Interruption (Barge-in)**: Instantly mute and cancel previous AI audio immediately whenever a new user interaction or question begins.
-> - **End-of-Speech Silence Detection**: Balanced 800ms adaptive silence threshold, filtering out background clicks while preventing speech truncation on natural pauses.
-> - **Audio Engine**: Web Audio API single-source buffer node with HTML5 Audio fallback (prevents Android notification bar clutter and audio focus conflicts).
+### 1. High Demand / 503 & 429 Error Resilience
+- **Multi-Model Fallback Chain (`src/utils/geminiClient.ts`)**: Configured a cascading fallback pipeline: `gemini-2.5-flash` ➔ `gemini-2.5-flash-lite` ➔ `gemini-3.1-flash-lite` ➔ `gemini-flash-latest`.
+- If any model spikes with high demand (503), rate limit (429), or temporary server overload, the client automatically and instantly falls forward to the next model without error dialogs or dropped voice sessions.
+- Spoken voice responses are limited to 140 output tokens for snappy, low-latency conversation turns.
 
----
+### 2. Strict Voice Gender & Persona Audio
+- **Black AI**: Strictly configured with male voice recognition (`['male', 'david', 'george', 'guy', 'rishi', 'prabhat', 'neel', 'madhav', 'en-in-x-ene', 'hi-in-x-hie', 'hi-in-x-hid']`), excluding female voice profiles. Set pitch to `0.72` and rate to `0.96` for an authoritative, deep masculine master detective presence. In Gemini TTS, uses `Charon`.
+- **Bell AI**: Strictly configured with feminine voice profiles (`['female', 'zira', 'samantha', 'swara', 'aditi', 'kalpana', 'hi-in-x-hic', 'hi-in-x-hia', 'hi-in-x-hif']`). Set pitch to `1.15` and rate to `1.05` for a spirited, lively companion voice. In Gemini TTS, uses `Zephyr`.
 
-## 1. Overview & Root Cause Analysis
+### 3. Anti-Truncation Android Sentence Queue
+- Android Chrome's `SpeechSynthesis` truncating after ~15s was fixed by splitting spoken responses into punctuation-bounded sentence segments (`.`, `!`, `?`, `।`, `\n`) and feeding them sequentially via a recursive sentence queue with an active `keepAlive` resume pulse.
+- When interrupted (barge-in), the sentence queue immediately aborts, cancelling all pending speech utterances instantly.
 
-### Identified Root Causes from Video Telemetry & Codebase Inspection
-1. **Acoustic Feedback & Overlapping Duplication**:
-   When the AI spoke through the phone's speaker, `SpeechRecognition` was either still active or restarted prematurely by `onend`. The device microphone picked up the AI's own voice, treated it as new user speech, and dispatched duplicate API queries. Multiple audio streams then played concurrently ("इंटरनेट सिर्फ एक नेटवर्क नहीं...").
-2. **"Tu-tu-tu" Mic Chime Churn**:
-   Android Chrome triggers a system chime every time `SpeechRecognition.start()` is called. Because `recognition.stop()` and unhandled `onerror`/`onend` events repeatedly toggled `recognition.start()`, the mic toggled multiple times within seconds.
-3. **Topic Bleeding & Outdated Async Responses**:
-   Absence of an `AbortController` meant that when multiple queries were triggered in quick succession, older requests completed late and played outdated answers over newer responses.
-4. **Mobile Audio Autoplay & Android Notification Bar Hijacking**:
-   Creating multiple dynamic `new Audio()` instances caused Android MediaSession notifications to linger and compete for system audio focus.
+### 4. Elimination of "Tu-tu-tu" Chime Loops & Mic Activation Conflicts
+- Implemented `isRecognitionActiveRef` and `restartDebounceTimerRef` in `src/App.tsx`.
+- Android Chrome chimes only when microphone state rapidly flips. `recognition.start()` is protected against redundant calls while already active.
+- When AI speaks, the microphone is aborted before audio plays, and a 350ms acoustic dissipation guard is enforced before listening resumes, preventing speaker audio from echoing back into speech recognition.
 
----
-
-## 2. Technical Architecture & Voice State Engine
-
-```
-   ┌──────────────────────────────────────────────────────────────────┐
-   │                  UNIFIED VOICE STATE MACHINE                    │
-   └──────────────────────────────────────────────────────────────────┘
-                                   │
-                                   ▼
-                             ┌───────────┐
-                             │   IDLE    │
-                             └─────┬─────┘
-                                   │ User clicks Mic / Connect
-                                   ▼
-                           ┌───────────────┐
-             ┌────────────►│   LISTENING   │◄───────────┐
-             │             └───────┬───────┘            │
-             │                     │ 800ms silence      │
-             │                     │ & valid transcript │
-             │                     ▼                    │
-             │             ┌───────────────┐            │
-             │             │  PROCESSING   │            │
-             │             └───────┬───────┘            │
-             │                     │ Audio ready        │
-             │                     ▼                    │
-             │             ┌───────────────┐            │
-             │             │   SPEAKING    │────────────┘
-             │             └───────┬───────┘   AI Audio finishes
-             │                     │
-             │ Interrupt / Barge-In│ (Instantly stops audio,
-             └─────────────────────┘  aborts pending query,
-                                      resumes listening)
-```
-
-### Component & State Interaction Flow
-```
-┌─────────────────────────┐          ┌──────────────────────────┐
-│   SpeechRecognition     │          │    Gemini Voice Agent    │
-│  (hi-IN / en-US STT)    │          │  (Direct Client Engine)  │
-└───────────┬─────────────┘          └────────────┬─────────────┘
-            │                                     │
-            │ user transcript                     │ replyText + TTS WAV
-            ▼                                     ▼
-┌─────────────────────────┐          ┌──────────────────────────┐
-│ Adaptive Silence Timer  │─────────►│  Web Audio API Pipeline  │
-│      (800ms debounce)   │          │ (Single Source Node/Gain)│
-└─────────────────────────┘          └────────────┬─────────────┘
-                                                  │
-                                                  ▼
-                                     ┌──────────────────────────┐
-                                     │ Avatar Video Sync        │
-                                     │ (Talking vs Sunna clips) │
-                                     └──────────────────────────┘
-```
-
----
-
-## 3. Key Technical Decisions & Fix Specifications
-
-### A. Strict Voice State Synchronization
-- **State Definition**: A single source-of-truth ref `voiceStateRef.current` with values `'idle' | 'listening' | 'processing' | 'speaking'`.
-- **Elimination of Chime Churn**: `recognition.start()` will **only** be invoked if `voiceStateRef.current === 'listening'`. In `onend` and `onerror`, if the state is `'processing'` or `'speaking'`, auto-restarts are strictly suppressed.
-
-### B. Prevention of Acoustic Feedback Loop (Speaker vs. Mic)
-- When transitioning to `'speaking'`, `recognition.abort()` is called immediately to close the microphone hardware before any sound leaves the speaker.
-- Once audio playback finishes, a small 250ms quiet grace period elapses before opening the microphone, ensuring lingering room reverberation is not captured.
-
-### C. Web Audio API Single-Source Pipeline
-- Create a dedicated single `AudioContext` with an `AudioBufferSourceNode` and `GainNode`.
-- Any existing audio source is stopped via `source.stop(0)` and disconnected before a new buffer is scheduled.
-- No HTML5 `<audio>` element instantiation during calls, preventing notification center clutter on Android.
-
-### D. Request Cancellation & Topic Bleeding Guard
-- Every new user speech session instantiates a fresh `AbortController`.
-- If the user speaks again, or if a previous query is pending when silence triggers, `currentAbortController.abort()` runs immediately. Stale AI responses are discarded without playing audio.
-
-### E. Low-Latency Response Pipeline
-- Keep speech-to-text language model optimized (`hi-IN`).
-- Use Gemini 3.8 Flash Lite TTS (`gemini-3.8-flash-lite-tts`) with standard WAV decoding.
-- Immediate browser `speechSynthesis` fallback if network jitter delays the WAV payload beyond 1.5 seconds, ensuring the user is never left waiting in silence.
-
----
-
-## 4. Implementation Steps & Target Files
-
-1. **`src/utils/geminiClient.ts`**:
-   - Add `abortSignal` support to `callDirectGeminiChat` and `generateGeminiDirectTTS`.
-   - Add conversation history context window (last 6 turns) so the model maintains coherent conversational context and doesn't jump topics.
-
-2. **`src/App.tsx`**:
-   - Implement the `WebAudioVoicePlayer` singleton to manage gapless, single-source playback and immediate muting on interruption.
-   - Refactor `startClientDirectVoiceLoop` with the 4-state engine (`idle`, `listening`, `processing`, `speaking`), 800ms adaptive silence detection, and acoustic echo isolation.
-   - Guard `recognition.onend` against unwanted restart loops.
-   - Synchronize avatar video states (`isAiSpeaking`) strictly with the Web Audio buffer start/stop callbacks.
-
-3. **Verification & Delivery**:
-   - Validate with `lint_applet` (`tsc --noEmit`) and `compile_applet`.
-   - Test barge-in interruption, continuous dialogue turns, Hindi/Hinglish speech inputs, and cleanup on call disconnect.
+### 5. Admin Panel Persistence on Netlify & Vercel
+- Added `loadLocalAdminData()` and synchronized registered user profiles (`blackbell_registered_users`) into localStorage.
+- When deployed on static hosting without a Node.js backend, Admin `sy5455977@gmail.com` can seamlessly view user counts, registered users, system settings, telemetry stats, and perform ban/unban actions directly in the browser.

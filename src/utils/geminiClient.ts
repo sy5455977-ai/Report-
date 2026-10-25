@@ -114,8 +114,8 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
     throw new Error('No messages provided to Gemini');
   }
 
-  // Ultra-fast responsive models (gemini-2.5-flash is universally available across all API keys)
-  const models = ['gemini-2.5-flash', 'gemini-flash-latest'];
+  // Multi-model resilience chain: automatically cascades when a model experiences high demand, 503 spikes, or 429 quota limits
+  const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
   let lastError: any = null;
 
   for (const model of models) {
@@ -132,7 +132,7 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
         },
         generationConfig: {
           temperature: 0.7,
-          maxOutputTokens: isVoiceMode ? 200 : 1000
+          maxOutputTokens: isVoiceMode ? 140 : 1000
         }
       };
 
@@ -145,7 +145,19 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
 
       if (!res.ok) {
         const errorJson = await res.json().catch(() => null);
-        throw new Error(errorJson?.error?.message || `API returned status ${res.status}`);
+        const errMsg = errorJson?.error?.message || `API returned status ${res.status}`;
+        
+        // If high demand (503), quota limits (429), or temporary spike, seamlessly cascade to next model
+        const isSpikeOrDemand = res.status === 503 || res.status === 429 || res.status === 500 || 
+          /high demand|spikes in demand|overloaded|resource has been exhausted|quota/i.test(errMsg);
+
+        if (isSpikeOrDemand) {
+          console.warn(`[Client-Direct Gemini] Model ${model} returned ${res.status} ("${errMsg}"). Automatically falling back to next model...`);
+          lastError = new Error(errMsg);
+          continue;
+        }
+
+        throw new Error(errMsg);
       }
 
       const data = await res.json();
@@ -173,11 +185,11 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
         throw err;
       }
       lastError = err;
-      console.warn(`[Client-Direct Gemini] Failed with ${model}, checking next model...`, err?.message);
+      console.warn(`[Client-Direct Gemini] Model ${model} failed, switching to next fallback model in chain:`, err?.message);
     }
   }
 
-  throw lastError || new Error('Failed to generate response from Gemini API');
+  throw lastError || new Error('All Gemini fallback models were unable to respond. Please check your network or try again in a moment.');
 }
 
 // Track whether Gemini REST TTS is supported on the user's key to prevent repeated 404 delays

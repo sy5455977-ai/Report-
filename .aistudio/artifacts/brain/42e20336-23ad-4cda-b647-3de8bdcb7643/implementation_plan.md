@@ -1,105 +1,125 @@
-# Vercel & Netlify Voice Model Support - Implementation Plan
+# Blackbell Voice Model Architecture & Reliability Engine
 
-Enable fully functional, hands-free real-time voice conversations for Blackbell AGI on static and serverless platforms like Vercel and Netlify where persistent WebSocket servers are unsupported.
+Comprehensive architectural overhaul of Blackbell's real-time Voice Model across Mobile, Netlify, and Vercel environments. Resolves microphone detection dropouts, overlapping duplicate audio, Android speech recognition chime loops ("tu-tu-tu"), acoustic feedback loops, late responses, and topic bleeding without changing existing UI styling or video personas.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The architectural decisions below were confirmed through the interactive requirements interview and govern this build:
-
-- **Confirmed Decision 1 (Automatic Hands-Free Voice Loop)**: When deployed on Vercel, Netlify, or environments where the backend `/live` WebSocket is unreachable, the app will automatically engage a continuous hands-free voice loop using browser speech recognition (`SpeechRecognition` / `webkitSpeechRecognition`), automatic turn-taking, and responsive silence detection.
-- **Confirmed Decision 2 (Gemini Audio TTS with Browser Voice Fallback)**: The AI companion's spoken responses will be generated using Google Gemini's Audio model (`gemini-3.8-flash-lite-tts`) with dedicated persona voices (`Zephyr` for Bell, `Charon` for Black), with instantaneous fallback to high-quality browser Speech Synthesis.
-- **Confirmed Decision 3 (Seamless Fallback Architecture)**: If WebSocket fails to connect to `/live` (the standard failure mode on Vercel and Netlify), the voice interface will automatically transition to the Client-Direct Voice Engine without throwing network errors or hanging.
-
----
-
-## 1. Overview & Core Concept
-
-- **What It Does**: Enables end-to-end voice conversations with Bell and Black personas on static hosts (Vercel, Netlify, Cloudflare Pages) using the user's personal Gemini API key. Users speak naturally through their microphone; the app transcribes their words in real-time, queries Gemini for companion responses, speaks the answers with expressive voice models, animates the companion video screen, and automatically resumes listening.
-- **Target Audience**: Users deploying Blackbell AGI on free or static hosting providers without dedicated Node/WebSocket server infrastructure.
-- **Key Value**: 100% portable voice assistant capabilities anywhere without requiring WebSocket servers or server-side streaming bridges.
+> The following architectural parameters have been confirmed by user selection:
+> - **Audio Interruption (Barge-in)**: Instantly mute and cancel previous AI audio immediately whenever a new user interaction or question begins.
+> - **End-of-Speech Silence Detection**: Balanced 800ms adaptive silence threshold, filtering out background clicks while preventing speech truncation on natural pauses.
+> - **Audio Engine**: Web Audio API single-source buffer node with HTML5 Audio fallback (prevents Android notification bar clutter and audio focus conflicts).
 
 ---
 
-## 2. User Experience & Visual Design
+## 1. Overview & Root Cause Analysis
 
-### Key User Flows
-
-1. **Entering Voice Mode**:
-   - User switches to **VOICE** mode via the sidebar toggle or starts a call.
-   - The app attempts to initialize audio. On Vercel/Netlify, WebSocket failure is gracefully trapped; the client activates the **Client-Direct Voice Engine**.
-   - Network status displays `Connected (Direct Client Voice)` in green with a live audio pulse.
-2. **Hands-Free Speech Interaction**:
-   - Microphone activates with noise suppression and echo cancellation.
-   - User speaks in Hindi, Hinglish, or English. Live speech is transcribed word-for-word in the transcript overlay on the video screen.
-   - Upon a natural speech pause (1.2s silence detection), speech recognition pauses and queries Gemini.
-3. **Companion Spoken Output & Avatar Animation**:
-   - `BellVideoScreen` triggers talking video state (`isAiSpeaking: true`).
-   - Response audio is fetched from Gemini TTS (`gemini-3.8-flash-lite-tts`) and played at 24kHz.
-   - When playback finishes, speech recognition automatically re-arms, ready for the user's next sentence.
+### Identified Root Causes from Video Telemetry & Codebase Inspection
+1. **Acoustic Feedback & Overlapping Duplication**:
+   When the AI spoke through the phone's speaker, `SpeechRecognition` was either still active or restarted prematurely by `onend`. The device microphone picked up the AI's own voice, treated it as new user speech, and dispatched duplicate API queries. Multiple audio streams then played concurrently ("इंटरनेट सिर्फ एक नेटवर्क नहीं...").
+2. **"Tu-tu-tu" Mic Chime Churn**:
+   Android Chrome triggers a system chime every time `SpeechRecognition.start()` is called. Because `recognition.stop()` and unhandled `onerror`/`onend` events repeatedly toggled `recognition.start()`, the mic toggled multiple times within seconds.
+3. **Topic Bleeding & Outdated Async Responses**:
+   Absence of an `AbortController` meant that when multiple queries were triggered in quick succession, older requests completed late and played outdated answers over newer responses.
+4. **Mobile Audio Autoplay & Android Notification Bar Hijacking**:
+   Creating multiple dynamic `new Audio()` instances caused Android MediaSession notifications to linger and compete for system audio focus.
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
-
-- **Decision 1: Continuous Web Speech Recognition with Pause Debounce**
-  - *Chosen Approach*: Implement a resilient speech listener with silence threshold debounce (1200ms) that automatically commits sentences and triggers generation.
-  - *Why*: Delivers a natural "call-like" hands-free conversational rhythm without requiring users to hold buttons or click to talk.
-  - *Alternatives Considered*: Manual push-to-talk button (rejected by user preference for hands-free loop).
-- **Decision 2: Direct Client-Side Gemini Audio TTS Dispatcher**
-  - *Chosen Approach*: Call `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite-tts:generateContent?key=${apiKey}` directly from browser with `responseModalities: ["AUDIO"]`.
-  - *Why*: Delivers expressive, studio-quality speech natively for both Bell and Black personalities without needing a proxy backend.
-
----
-
-## 4. Technical Architecture & Data Strategy
-
-### Component & Voice Loop Diagram
+## 2. Technical Architecture & Voice State Engine
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│              Blackbell Voice Engine (App.tsx)               │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│   [User Speaks] ──▶ Continuous SpeechRecognition            │
-│                            │                                │
-│                     (1.2s Silence)                          │
-│                            ▼                                │
-│             callDirectGeminiChat (Hinglish AI)              │
-│                            │                                │
-│                    (Response Text)                          │
-│                            ▼                                │
-│           generateGeminiDirectTTS (Gemini 3.8 TTS)          │
-│                      /           \                          │
-│                (Success)       (Fallback)                   │
-│                   ▼                ▼                        │
-│            WAV 24kHz Audio   Browser SpeechSynthesis        │
-│                   │                │                        │
-│                   ▼                ▼                        │
-│           [BellVideoScreen Talking Video Animation]         │
-│                            │                                │
-│                    (Audio Ended)                            │
-│                            ▼                                │
-│             [Auto-Resume SpeechRecognition Loop]            │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+   ┌──────────────────────────────────────────────────────────────────┐
+   │                  UNIFIED VOICE STATE MACHINE                    │
+   └──────────────────────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+                             ┌───────────┐
+                             │   IDLE    │
+                             └─────┬─────┘
+                                   │ User clicks Mic / Connect
+                                   ▼
+                           ┌───────────────┐
+             ┌────────────►│   LISTENING   │◄───────────┐
+             │             └───────┬───────┘            │
+             │                     │ 800ms silence      │
+             │                     │ & valid transcript │
+             │                     ▼                    │
+             │             ┌───────────────┐            │
+             │             │  PROCESSING   │            │
+             │             └───────┬───────┘            │
+             │                     │ Audio ready        │
+             │                     ▼                    │
+             │             ┌───────────────┐            │
+             │             │   SPEAKING    │────────────┘
+             │             └───────┬───────┘   AI Audio finishes
+             │                     │
+             │ Interrupt / Barge-In│ (Instantly stops audio,
+             └─────────────────────┘  aborts pending query,
+                                      resumes listening)
 ```
 
-### Module Responsibilities
+### Component & State Interaction Flow
+```
+┌─────────────────────────┐          ┌──────────────────────────┐
+│   SpeechRecognition     │          │    Gemini Voice Agent    │
+│  (hi-IN / en-US STT)    │          │  (Direct Client Engine)  │
+└───────────┬─────────────┘          └────────────┬─────────────┘
+            │                                     │
+            │ user transcript                     │ replyText + TTS WAV
+            ▼                                     ▼
+┌─────────────────────────┐          ┌──────────────────────────┐
+│ Adaptive Silence Timer  │─────────►│  Web Audio API Pipeline  │
+│      (800ms debounce)   │          │ (Single Source Node/Gain)│
+└─────────────────────────┘          └────────────┬─────────────┘
+                                                  │
+                                                  ▼
+                                     ┌──────────────────────────┐
+                                     │ Avatar Video Sync        │
+                                     │ (Talking vs Sunna clips) │
+                                     └──────────────────────────┘
+```
+
+---
+
+## 3. Key Technical Decisions & Fix Specifications
+
+### A. Strict Voice State Synchronization
+- **State Definition**: A single source-of-truth ref `voiceStateRef.current` with values `'idle' | 'listening' | 'processing' | 'speaking'`.
+- **Elimination of Chime Churn**: `recognition.start()` will **only** be invoked if `voiceStateRef.current === 'listening'`. In `onend` and `onerror`, if the state is `'processing'` or `'speaking'`, auto-restarts are strictly suppressed.
+
+### B. Prevention of Acoustic Feedback Loop (Speaker vs. Mic)
+- When transitioning to `'speaking'`, `recognition.abort()` is called immediately to close the microphone hardware before any sound leaves the speaker.
+- Once audio playback finishes, a small 250ms quiet grace period elapses before opening the microphone, ensuring lingering room reverberation is not captured.
+
+### C. Web Audio API Single-Source Pipeline
+- Create a dedicated single `AudioContext` with an `AudioBufferSourceNode` and `GainNode`.
+- Any existing audio source is stopped via `source.stop(0)` and disconnected before a new buffer is scheduled.
+- No HTML5 `<audio>` element instantiation during calls, preventing notification center clutter on Android.
+
+### D. Request Cancellation & Topic Bleeding Guard
+- Every new user speech session instantiates a fresh `AbortController`.
+- If the user speaks again, or if a previous query is pending when silence triggers, `currentAbortController.abort()` runs immediately. Stale AI responses are discarded without playing audio.
+
+### E. Low-Latency Response Pipeline
+- Keep speech-to-text language model optimized (`hi-IN`).
+- Use Gemini 3.8 Flash Lite TTS (`gemini-3.8-flash-lite-tts`) with standard WAV decoding.
+- Immediate browser `speechSynthesis` fallback if network jitter delays the WAV payload beyond 1.5 seconds, ensuring the user is never left waiting in silence.
+
+---
+
+## 4. Implementation Steps & Target Files
 
 1. **`src/utils/geminiClient.ts`**:
-   - Export `generateGeminiDirectTTS(text, voiceName, apiKey)` to generate binary WAV speech from `gemini-3.8-flash-lite-tts`.
+   - Add `abortSignal` support to `callDirectGeminiChat` and `generateGeminiDirectTTS`.
+   - Add conversation history context window (last 6 turns) so the model maintains coherent conversational context and doesn't jump topics.
+
 2. **`src/App.tsx`**:
-   - Implement `startClientDirectVoiceLoop()` with `SpeechRecognition` or `webkitSpeechRecognition`.
-   - Update `connectToLiveAPI()` so if WebSocket fails to connect within 2.5s or fires `onerror`/`onclose`, it seamlessly routes into `startClientDirectVoiceLoop()`.
-   - Handle continuous loop state transitions (`listening` -> `thinking` -> `speaking` -> `listening`).
+   - Implement the `WebAudioVoicePlayer` singleton to manage gapless, single-source playback and immediate muting on interruption.
+   - Refactor `startClientDirectVoiceLoop` with the 4-state engine (`idle`, `listening`, `processing`, `speaking`), 800ms adaptive silence detection, and acoustic echo isolation.
+   - Guard `recognition.onend` against unwanted restart loops.
+   - Synchronize avatar video states (`isAiSpeaking`) strictly with the Web Audio buffer start/stop callbacks.
 
----
-
-## 5. Verification & Testing Plan
-
-1. **Vercel/Netlify Simulation**: Verify that when WebSocket fails or is blocked, the app automatically switches to the Direct Client Voice Loop without crashing.
-2. **Speech Recognition Test**: Verify that spoken input in Hindi and English is transcribed cleanly.
-3. **Gemini TTS Test**: Verify that audio generates from `gemini-3.8-flash-lite-tts` with `Zephyr` (Bell) and `Charon` (Black).
-4. **Turn-Taking Verification**: Verify that after the companion finishes speaking, the microphone re-opens automatically for the next query.
-5. **Compilation Verification**: Run `compile_applet` and `lint_applet` to ensure zero build errors.
+3. **Verification & Delivery**:
+   - Validate with `lint_applet` (`tsc --noEmit`) and `compile_applet`.
+   - Test barge-in interruption, continuous dialogue turns, Hindi/Hinglish speech inputs, and cleanup on call disconnect.

@@ -1887,11 +1887,113 @@ export default function App() {
   const hasOpenedAppInBackgroundRef = useRef<boolean>(false);
 
   // Direct Client-Side Voice Engine Refs for Vercel & Netlify standalone deployment
+  type VoiceMachineState = 'idle' | 'listening' | 'processing' | 'speaking';
+  const voiceStateRef = useRef<VoiceMachineState>('idle');
   const speechRecognitionRef = useRef<any>(null);
   const isDirectVoiceActiveRef = useRef<boolean>(false);
-  const isDirectAiRespondingRef = useRef<boolean>(false);
   const silenceTimerRef = useRef<any>(null);
+  const speechGracePeriodTimerRef = useRef<any>(null);
   const currentDirectAudioRef = useRef<HTMLAudioElement | null>(null);
+  const directVoiceAbortControllerRef = useRef<AbortController | null>(null);
+  const directAudioContextRef = useRef<AudioContext | null>(null);
+  const directCurrentSourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
+  const directVoiceHistoryRef = useRef<Array<{ role: 'user' | 'ai'; content: string }>>([]);
+
+  // Comprehensive immediate cancellation of all audio sources
+  const stopAllVoicePlayback = () => {
+    // 1. Web Audio API source node
+    if (directCurrentSourceNodeRef.current) {
+      try {
+        directCurrentSourceNodeRef.current.onended = null;
+        directCurrentSourceNodeRef.current.stop(0);
+        directCurrentSourceNodeRef.current.disconnect();
+      } catch (e) {}
+      directCurrentSourceNodeRef.current = null;
+    }
+    // 2. HTML5 audio fallback
+    if (currentDirectAudioRef.current) {
+      try {
+        currentDirectAudioRef.current.pause();
+        currentDirectAudioRef.current.currentTime = 0;
+        currentDirectAudioRef.current.src = '';
+      } catch (e) {}
+      currentDirectAudioRef.current = null;
+    }
+    // 3. Browser Speech Synthesis
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch (e) {}
+    }
+    setIsAiSpeaking(false);
+  };
+
+  // Play WAV audio buffer using Web Audio API (single-source buffer node with fallback)
+  const playBase64WavInWebAudio = async (base64Wav: string, onEnded: () => void): Promise<boolean> => {
+    try {
+      stopAllVoicePlayback();
+
+      if (!directAudioContextRef.current || directAudioContextRef.current.state === 'closed') {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        directAudioContextRef.current = new AudioCtx();
+      }
+      const ctx = directAudioContextRef.current;
+      if (ctx.state === 'suspended') {
+        await ctx.resume();
+      }
+
+      // Convert base64 to binary buffer
+      const binaryStr = atob(base64Wav);
+      const len = binaryStr.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+
+      const audioBuffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
+      const sourceNode = ctx.createBufferSource();
+      sourceNode.buffer = audioBuffer;
+      sourceNode.connect(ctx.destination);
+      directCurrentSourceNodeRef.current = sourceNode;
+
+      setIsAiSpeaking(true);
+
+      sourceNode.onended = () => {
+        if (directCurrentSourceNodeRef.current === sourceNode) {
+          directCurrentSourceNodeRef.current = null;
+          setIsAiSpeaking(false);
+          onEnded();
+        }
+      };
+
+      sourceNode.start(0);
+      return true;
+    } catch (err) {
+      console.warn("[WebAudio] Direct decode failed, falling back to HTML5 audio element:", err);
+      try {
+        stopAllVoicePlayback();
+        const audio = new Audio(`data:audio/wav;base64,${base64Wav}`);
+        currentDirectAudioRef.current = audio;
+        setIsAiSpeaking(true);
+        audio.onended = () => {
+          setIsAiSpeaking(false);
+          currentDirectAudioRef.current = null;
+          onEnded();
+        };
+        audio.onerror = () => {
+          setIsAiSpeaking(false);
+          currentDirectAudioRef.current = null;
+          onEnded();
+        };
+        await audio.play();
+        return true;
+      } catch (audioErr) {
+        console.warn("[HTML5 Audio] Playback failed:", audioErr);
+        setIsAiSpeaking(false);
+        return false;
+      }
+    }
+  };
 
   const speakWithBrowserVoice = (text: string, onEnded?: () => void) => {
     if (!('speechSynthesis' in window)) {
@@ -1899,7 +2001,7 @@ export default function App() {
       return;
     }
     try {
-      window.speechSynthesis.cancel();
+      stopAllVoicePlayback();
       const cleanText = text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
       const utterance = new SpeechSynthesisUtterance(cleanText);
       const voices = window.speechSynthesis.getVoices();
@@ -1909,13 +2011,13 @@ export default function App() {
         chosenVoice = voices.find(v => 
           (v.name.toLowerCase().includes('male') || v.name.toLowerCase().includes('david') || v.name.toLowerCase().includes('george') || v.name.toLowerCase().includes('guy') || v.name.toLowerCase().includes('rishi')) && !v.name.toLowerCase().includes('female')
         ) || voices.find(v => v.lang.startsWith('hi')) || voices[0];
-        utterance.pitch = 0.8;
+        utterance.pitch = 0.85;
         utterance.rate = 1.0;
       } else {
         chosenVoice = voices.find(v => 
           (v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('zira') || v.name.toLowerCase().includes('samantha'))
         ) || voices.find(v => v.lang.startsWith('hi')) || voices[0];
-        utterance.pitch = 1.1;
+        utterance.pitch = 1.05;
         utterance.rate = 1.05;
       }
       if (chosenVoice) utterance.voice = chosenVoice;
@@ -1949,9 +2051,23 @@ export default function App() {
     }
 
     try {
+      // Abort any existing recognition and audio instance
       if (speechRecognitionRef.current) {
         try { speechRecognitionRef.current.abort(); } catch (e) {}
         speechRecognitionRef.current = null;
+      }
+      stopAllVoicePlayback();
+      if (directVoiceAbortControllerRef.current) {
+        directVoiceAbortControllerRef.current.abort();
+        directVoiceAbortControllerRef.current = null;
+      }
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
+      if (speechGracePeriodTimerRef.current) {
+        clearTimeout(speechGracePeriodTimerRef.current);
+        speechGracePeriodTimerRef.current = null;
       }
 
       setError(null);
@@ -1962,15 +2078,32 @@ export default function App() {
       isRecordingRef.current = true;
       setNetworkStatus('stable');
       isDirectVoiceActiveRef.current = true;
-      isDirectAiRespondingRef.current = false;
+      voiceStateRef.current = 'listening';
 
       const recognition = new SpeechRecognition();
       speechRecognitionRef.current = recognition;
       recognition.continuous = true;
       recognition.interimResults = true;
-      recognition.lang = 'hi-IN'; // Works great for Hindi, Hinglish, and English!
+      recognition.lang = 'hi-IN'; // Works seamlessly for Hindi, Hinglish, and English
 
       setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
+
+      const safeStartListening = () => {
+        if (!isDirectVoiceActiveRef.current || mode !== 'voice' || voiceStateRef.current !== 'listening') {
+          return;
+        }
+        try {
+          recognition.start();
+        } catch (e: any) {
+          // If already started or aborting, ignore silently to prevent duplicate chime
+        }
+      };
+
+      const safeStopListening = () => {
+        try {
+          recognition.abort();
+        } catch (e) {}
+      };
 
       recognition.onstart = () => {
         setIsConnected(true);
@@ -1980,13 +2113,23 @@ export default function App() {
       };
 
       recognition.onresult = (event: any) => {
-        if (isDirectAiRespondingRef.current) return;
+        // Instant Barge-In: If user speaks while AI is speaking or processing, immediately cancel AI playback!
+        if (voiceStateRef.current === 'speaking' || voiceStateRef.current === 'processing') {
+          stopAllVoicePlayback();
+          if (directVoiceAbortControllerRef.current) {
+            directVoiceAbortControllerRef.current.abort();
+            directVoiceAbortControllerRef.current = null;
+          }
+          voiceStateRef.current = 'listening';
+        }
 
         let interim = '';
         let final = '';
+        let hasFinalResult = false;
         for (let i = event.resultIndex; i < event.results.length; ++i) {
           if (event.results[i].isFinal) {
             final += event.results[i][0].transcript;
+            hasFinalResult = true;
           } else {
             interim += event.results[i][0].transcript;
           }
@@ -1996,91 +2139,112 @@ export default function App() {
         if (userSpoken) {
           setVoiceTranscription(userSpoken);
 
+          // Adaptive silence threshold: 750ms if finalized sentence, 900ms if intermediate pause (balanced 800ms average)
+          const pauseThreshold = hasFinalResult ? 750 : 900;
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+
           silenceTimerRef.current = setTimeout(async () => {
-            if (isDirectAiRespondingRef.current || !isDirectVoiceActiveRef.current) return;
-            isDirectAiRespondingRef.current = true;
-            try {
-              recognition.stop();
-            } catch (e) {}
+            if (voiceStateRef.current !== 'listening' || !isDirectVoiceActiveRef.current) return;
+
+            // Discard negligible noise, clicks, or single punctuation
+            if (userSpoken.length < 2) return;
+
+            // Transition strictly to 'processing'
+            voiceStateRef.current = 'processing';
+            // Stop mic recognition to prevent hearing speaker output or Android chime loop
+            safeStopListening();
 
             const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || '';
             if (!activeKey) {
               setError("Please configure your Gemini API Key in the top header to use voice conversation.");
-              isDirectAiRespondingRef.current = false;
+              voiceStateRef.current = 'listening';
+              safeStartListening();
               return;
             }
 
+            const abortController = new AbortController();
+            directVoiceAbortControllerRef.current = abortController;
+
             try {
               setVoiceTranscription('Thinking... 🤔');
+
+              // Append user message to contextual voice history (prevents topic bleeding)
+              directVoiceHistoryRef.current.push({ role: 'user', content: userSpoken });
+              if (directVoiceHistoryRef.current.length > 8) {
+                directVoiceHistoryRef.current = directVoiceHistoryRef.current.slice(-8);
+              }
+
               const result = await callDirectGeminiChat({
-                messages: [{ role: 'user', content: userSpoken }],
+                messages: directVoiceHistoryRef.current,
                 personality,
                 apiKey: activeKey,
                 userName: currentUser?.username || 'User',
-                isAdmin: currentUser?.email === 'sy5455977@gmail.com'
+                isAdmin: currentUser?.email === 'sy5455977@gmail.com',
+                isVoiceMode: true,
+                signal: abortController.signal
               });
 
-              const replyText = result.text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
+              if (abortController.signal.aborted) return;
+
+              const rawReply = result.text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
+              const replyText = rawReply || (personality === 'black' ? 'Bilkul janab, main samajh gaya.' : 'Haan, bolo na!');
+
+              // Append AI response to context history
+              directVoiceHistoryRef.current.push({ role: 'ai', content: replyText });
+              if (directVoiceHistoryRef.current.length > 8) {
+                directVoiceHistoryRef.current = directVoiceHistoryRef.current.slice(-8);
+              }
+
               setVoiceTranscription(replyText);
-              setIsAiSpeaking(true);
+
+              // Voice playback completion handler
+              const handleVoiceCompleted = () => {
+                if (abortController.signal.aborted) return;
+                stopAllVoicePlayback();
+                voiceStateRef.current = 'listening';
+
+                // 250ms room silence grace period before opening mic, eliminating room echo feedback
+                if (speechGracePeriodTimerRef.current) clearTimeout(speechGracePeriodTimerRef.current);
+                speechGracePeriodTimerRef.current = setTimeout(() => {
+                  if (voiceStateRef.current === 'listening' && isDirectVoiceActiveRef.current && mode === 'voice') {
+                    setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
+                    safeStartListening();
+                  }
+                }, 250);
+              };
+
+              // Transition state to 'speaking'
+              voiceStateRef.current = 'speaking';
 
               const voiceName = personality === 'black' ? 'Charon' : 'Zephyr';
-              let ttsSucceeded = false;
+              let ttsAudioPlayed = false;
+
               try {
-                const base64Audio = await generateGeminiDirectTTS(replyText, voiceName, activeKey);
-                if (base64Audio) {
-                  const audio = new Audio(`data:audio/wav;base64,${base64Audio}`);
-                  currentDirectAudioRef.current = audio;
-
-                  const handleAudioFinished = () => {
-                    setIsAiSpeaking(false);
-                    isDirectAiRespondingRef.current = false;
-                    currentDirectAudioRef.current = null;
-                    if (isDirectVoiceActiveRef.current && mode === 'voice') {
-                      setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
-                      try { recognition.start(); } catch (e) {}
-                    }
-                  };
-
-                  audio.onended = handleAudioFinished;
-                  audio.onerror = () => {
-                    speakWithBrowserVoice(replyText, () => {
-                      setIsAiSpeaking(false);
-                      isDirectAiRespondingRef.current = false;
-                      if (isDirectVoiceActiveRef.current && mode === 'voice') {
-                        setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
-                        try { recognition.start(); } catch (e) {}
-                      }
-                    });
-                  };
-
-                  await audio.play();
-                  ttsSucceeded = true;
+                const base64Audio = await generateGeminiDirectTTS(replyText, voiceName, activeKey, abortController.signal);
+                if (base64Audio && !abortController.signal.aborted) {
+                  const played = await playBase64WavInWebAudio(base64Audio, handleVoiceCompleted);
+                  ttsAudioPlayed = played;
                 }
-              } catch (ttsErr) {
+              } catch (ttsErr: any) {
+                if (ttsErr?.name === 'AbortError') return;
                 console.warn("[Voice Direct] Gemini TTS failed, using browser speech synthesis:", ttsErr);
               }
 
-              if (!ttsSucceeded) {
-                speakWithBrowserVoice(replyText, () => {
-                  setIsAiSpeaking(false);
-                  isDirectAiRespondingRef.current = false;
-                  if (isDirectVoiceActiveRef.current && mode === 'voice') {
-                    setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
-                    try { recognition.start(); } catch (e) {}
-                  }
-                });
+              if (!ttsAudioPlayed && !abortController.signal.aborted) {
+                speakWithBrowserVoice(replyText, handleVoiceCompleted);
               }
             } catch (queryErr: any) {
+              if (queryErr?.name === 'AbortError' || abortController.signal.aborted) {
+                return;
+              }
               console.error("[Voice Direct] AI generation error:", queryErr);
               setError(queryErr?.message || "Failed to generate voice response.");
-              isDirectAiRespondingRef.current = false;
+              voiceStateRef.current = 'listening';
               if (isDirectVoiceActiveRef.current && mode === 'voice') {
-                try { recognition.start(); } catch (e) {}
+                safeStartListening();
               }
             }
-          }, 1200);
+          }, pauseThreshold);
         }
       };
 
@@ -2088,23 +2252,24 @@ export default function App() {
         if (e.error === 'no-speech' || e.error === 'aborted') {
           return;
         }
-        console.warn("[SpeechRecognition error]:", e);
+        console.warn("[SpeechRecognition error]:", e.error);
       };
 
       recognition.onend = () => {
-        if (isDirectVoiceActiveRef.current && !isDirectAiRespondingRef.current && mode === 'voice') {
-          try {
-            recognition.start();
-          } catch (e) {}
+        // ONLY restart if explicitly in 'listening' state!
+        // Prevents the Android "tu-tu-tu" mic churn during processing or speaking
+        if (isDirectVoiceActiveRef.current && voiceStateRef.current === 'listening' && mode === 'voice') {
+          safeStartListening();
         }
       };
 
-      recognition.start();
+      safeStartListening();
     } catch (err: any) {
       console.warn("Direct speech recognition failed to start:", err);
       setError(err?.message || "Could not start voice recognition.");
       setIsConnecting(false);
       isConnectingRef.current = false;
+      voiceStateRef.current = 'idle';
     }
   };
 
@@ -2732,11 +2897,19 @@ export default function App() {
 
   const disconnect = (isUnintentional = false) => {
     // Teardown Direct Voice Loop (Vercel & Netlify)
+    voiceStateRef.current = 'idle';
     isDirectVoiceActiveRef.current = false;
-    isDirectAiRespondingRef.current = false;
+    if (directVoiceAbortControllerRef.current) {
+      directVoiceAbortControllerRef.current.abort();
+      directVoiceAbortControllerRef.current = null;
+    }
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
+    }
+    if (speechGracePeriodTimerRef.current) {
+      clearTimeout(speechGracePeriodTimerRef.current);
+      speechGracePeriodTimerRef.current = null;
     }
     if (speechRecognitionRef.current) {
       try {
@@ -2744,17 +2917,8 @@ export default function App() {
       } catch (e) {}
       speechRecognitionRef.current = null;
     }
-    if (currentDirectAudioRef.current) {
-      try {
-        currentDirectAudioRef.current.pause();
-      } catch (e) {}
-      currentDirectAudioRef.current = null;
-    }
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      try {
-        window.speechSynthesis.cancel();
-      } catch (e) {}
-    }
+    stopAllVoicePlayback();
+    directVoiceHistoryRef.current = [];
 
     stopVision();
     setIsConnected(false);

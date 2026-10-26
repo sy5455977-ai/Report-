@@ -64,8 +64,131 @@ export async function callDirectGeminiChat({
   const currentYear = new Date().getFullYear();
   const currentDateTimeIST = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', dateStyle: 'full', timeStyle: 'medium' });
 
+  // Detect /build, /rebuild, /note commands in client-direct execution
+  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+  const userText = lastUserMsg?.content?.trim() || '';
+  const lowerUserText = userText.toLowerCase();
+
+  const isBuildCommand = lowerUserText.startsWith('/build');
+  const isRebuildCommand = lowerUserText.startsWith('/rebuild');
+  const isNoteCommand = lowerUserText.startsWith('/note') || (['notes bana', 'note bana', 'handwritten note'].some(t => lowerUserText.includes(t)) && !isBuildCommand && !isRebuildCommand);
+  const isNaturalBuild = !isBuildCommand && !isRebuildCommand && !isNoteCommand && !lowerUserText.startsWith('/image') && (() => {
+    const buildVerbs = ['banao', 'banaye', 'banado', 'banaiye', 'banana hai', 'bana do', 'bana ke do', 'create', 'build', 'make', 'develop'];
+    const appNouns = ['game', 'app', 'website', 'webpage', 'calculator', 'stopwatch', 'timer', 'clock', 'puzzle', 'quiz', 'dashboard', 'portfolio', 'mario', 'snake', 'flappy', 'todo', 'converter', 'simulator', '2048', 'pong', 'chess'];
+    return buildVerbs.some(v => lowerUserText.includes(v)) && appNouns.some(n => lowerUserText.includes(n));
+  })();
+
+  const isBuilderMode = (isBuildCommand || isRebuildCommand || isNaturalBuild) && !isVoiceMode;
+  let generationTemp = 0.7;
+  let maxTokens = isVoiceMode ? 140 : 1000;
+
   let systemInstruction = '';
-  if (personality === 'black') {
+
+  if (isBuilderMode) {
+    generationTemp = 0.2;
+    maxTokens = 8192; // Ensure full index.html fits without cutoffs
+
+    if (isRebuildCommand) {
+      systemInstruction = `You are an expert AI software engineer that repairs and enhances standalone web applications and games inside a single "index.html" file.
+COMMAND: /rebuild
+CRITICAL PROTOCOL:
+1. Carefully analyze the existing index.html and user requested changes.
+2. Maintain 100% of the working features, CSS styling, logic, and mechanics. DO NOT DELETE OR BREAK EXISTING FUNCTIONALITY.
+3. Fix the requested issue, add requested features, or upgrade the UI.
+4. Output the FULL, COMPLETE working updated "index.html" enclosed strictly within a single code block:
+\`\`\`html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Application</title>
+  <style>/* Complete updated CSS */</style>
+</head>
+<body>
+  <!-- Complete updated UI -->
+  <script>/* Complete updated JavaScript with Web Audio API & controls */</script>
+</body>
+</html>
+\`\`\`
+
+Followed by a concise report:
+✅ **Rebuild Complete**
+- **Changes Applied:** <Summary of modifications>
+- **Tested & Preserved:** <Verification that previous features remain functional>
+
+[QUESTIONS]
+- /rebuild isme sound effects aur score animations add karo
+- /rebuild mobile touch controls improve karo
+- /rebuild dark mode toggle add karo`;
+    } else {
+      systemInstruction = `You are an expert AI software engineer that builds complete, fully-functional, standalone web applications and games inside a single "index.html" file.
+COMMAND: /build
+CRITICAL BUILD PROTOCOL:
+1. Build the FULL, COMPLETE working product inside a single self-contained "index.html" (HTML + CSS + JavaScript).
+2. NO PLACEHOLDERS, NO DUMMY STUBS, NO TODO COMMENTS. Every button, input, or control must work.
+3. MOBILE & DESKTOP COMPATIBILITY: Include touch controls for mobile AND keyboard controls for desktop.
+4. AUDIO: Synthesize any sound effects using Web Audio API (new (window.AudioContext || window.webkitAudioContext)()).
+5. POLISHED UI: Modern, responsive CSS with clean typography, high contrast, and smooth animations.
+6. OUTPUT FORMAT: Provide the full single-file index.html enclosed in a code block:
+\`\`\`html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Application</title>
+  <style>/* Complete CSS */</style>
+</head>
+<body>
+  <!-- Complete UI -->
+  <script>/* Complete JavaScript */</script>
+</body>
+</html>
+\`\`\`
+
+Followed by:
+✅ **Build Complete**
+- **Project:** <Description>
+- **Working Features:** <Key interactive features>
+- **File:** \`index.html\` is ready and running in the live interactive sandbox below!
+
+[QUESTIONS]
+- /rebuild isme sound effects aur score system add karo
+- /rebuild mobile touch controls improve karo
+- /rebuild dark mode toggle aur settings panel add karo`;
+    }
+  } else if (isNoteCommand && !isVoiceMode) {
+    generationTemp = 0.2;
+    maxTokens = 8192;
+    systemInstruction = `You are Blackbell NoteMaster, an expert academic researcher that creates visual handwritten student study notes in a single self-contained index.html.
+OUTPUT FORMAT:
+Enclose the complete HTML inside a code block:
+\`\`\`html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Study Notes</title>
+  <style>
+    /* Lined paper styling with cyan lines, double red vertical margin, highlighter accents */
+  </style>
+</head>
+<body>
+  <!-- Structured visual notes with handwritten aesthetic, diagrams, summary, and PDF export -->
+  <script>
+    // Print/PDF export handler
+  </script>
+</body>
+</html>
+\`\`\`
+
+[QUESTIONS]
+- /note isme flowcharts aur diagrams add karo
+- /note is topic ke key exam questions add karo
+- /note summary aur quick formula cheat sheet banao`;
+  } else if (personality === 'black') {
     systemInstruction = `You are Black, the commanding, fiercely intelligent, and deeply confident male warrior & master detective persona of Blackbell. You speak like a powerful motivational speaker and razor-sharp master detective with an authoritative, deep, resolute, masculine presence and brilliant clarity.
 WARRIOR & MOTIVATIONAL SPIRIT:
 Speak with commanding strength, bold energy, disciplined focus, and unbreakable confidence. Zero softness, zero whining, zero hesitation.
@@ -103,12 +226,37 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
 
   // Format contents for Gemini REST API (keep up to last 8 turns for coherent conversational context)
   const windowedMessages = messages.slice(-8);
+
+  // If rebuilding, extract previous index.html from history so Gemini knows the base code
+  let existingHtmlForRebuild = '';
+  if (isRebuildCommand) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m?.content) {
+        const match = m.content.match(/```html\s*([\s\S]*?)\s*```/i) || m.content.match(/```\s*([\s\S]*?)\s*```/i);
+        if (match && match[1] && (match[1].includes('<!DOCTYPE') || match[1].includes('<html') || match[1].includes('<body'))) {
+          existingHtmlForRebuild = match[1].trim();
+          break;
+        } else if (m.content.includes('<!DOCTYPE html') || m.content.includes('<html')) {
+          existingHtmlForRebuild = m.content.trim();
+          break;
+        }
+      }
+    }
+  }
+
   const formattedContents = windowedMessages
     .filter(m => m.content && m.content.trim())
-    .map(m => ({
-      role: m.role === 'user' ? 'user' : 'model',
-      parts: [{ text: m.content }]
-    }));
+    .map(m => {
+      let text = m.content;
+      if (m === lastUserMsg && isRebuildCommand && existingHtmlForRebuild) {
+        text = `EXISTING INDEX.HTML CODE TO UPDATE:\n\`\`\`html\n${existingHtmlForRebuild}\n\`\`\`\n\nUSER REBUILD REQUEST:\n${userText}`;
+      }
+      return {
+        role: m.role === 'user' ? 'user' : 'model',
+        parts: [{ text }]
+      };
+    });
 
   if (formattedContents.length === 0) {
     throw new Error('No messages provided to Gemini');
@@ -131,8 +279,8 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
           parts: [{ text: systemInstruction }]
         },
         generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: isVoiceMode ? 140 : 1000
+          temperature: generationTemp,
+          maxOutputTokens: maxTokens
         }
       };
 
@@ -212,14 +360,14 @@ export async function generateGeminiDirectTTS(
   if (!speechText) return null;
 
   try {
-    // 1200ms strict timeout to avoid voice lag
+    // 800ms strict timeout to avoid voice lag
     const timeoutController = new AbortController();
-    const timer = setTimeout(() => timeoutController.abort(), 1200);
+    const timer = setTimeout(() => timeoutController.abort(), 800);
 
     const onParentAbort = () => timeoutController.abort();
     if (signal) signal.addEventListener('abort', onParentAbort);
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite-tts:generateContent?key=${cleanKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${cleanKey}`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -301,61 +301,183 @@ async function buildAndroidApkInBrowser(
   };
   zip.file('assets/settings.json', JSON.stringify(settingsJson, null, 2));
 
-  // 7. If custom logo is provided, resize via browser canvas and embed
-  if (logoBase64) {
-    try {
-      const cleanBase64 = logoBase64.replace(/^data:image\/[a-zA-Z0-9.-]+;base64,/, '');
-      const img = new Image();
-      img.src = `data:image/png;base64,${cleanBase64}`;
-      await new Promise((resolve, reject) => {
-        img.onload = resolve;
-        img.onerror = reject;
-      });
+  // 7. Generate unique Android package name of exactly 22 chars: "com.blackbell.app_xxxx"
+  const generateUniqueId = (): string => {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let res = '';
+    for (let i = 0; i < 4; i++) {
+      res += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return res;
+  };
+  const targetPackage = `com.blackbell.app_${generateUniqueId()}`;
 
-      const canvas = document.createElement('canvas');
-      canvas.width = 512;
-      canvas.height = 512;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(img, 0, 0, 512, 512);
-        const blob = await new Promise<Blob | null>(r => canvas.toBlob(r, 'image/png'));
-        if (blob) {
-          const iconBuffer = await blob.arrayBuffer();
-          const allLauncherIconPaths = [
-            'res/pu.png', 'res/8h.png', 'res/j4.png', 'res/tG.png', 'res/pk.png',
-            'res/0Z.png', 'res/9z.png', 'res/Ag.png', 'res/Ck.png', 'res/FW.png',
-            'res/Gf.png', 'res/MD.png', 'res/OX1.png', 'res/kp.png', 'res/nf.png',
-            'res/p8.png', 'res/5P.png', 'res/7m.png', 'res/OM.png', 'res/Pb.png',
-            'res/Y3.png', 'res/aU.png', 'res/zz.png', 'res/6d.png', 'res/6t.png',
-            'res/mipmap-xxxhdpi-v4/ic_launcher.png',
-            'res/mipmap-xxhdpi-v4/ic_launcher.png',
-            'res/mipmap-xhdpi-v4/ic_launcher.png',
-            'res/mipmap-hdpi-v4/ic_launcher.png',
-            'res/mipmap-mdpi-v4/ic_launcher.png',
-            'assets/demo/img/image.png'
-          ];
-          allLauncherIconPaths.forEach(p => zip.file(p, iconBuffer));
+  // 8. Patch AndroidManifest.xml binary XML (replaces default net.mikespub.mywebview with unique package)
+  const manifestFile = zip.file('AndroidManifest.xml');
+  if (manifestFile) {
+    try {
+      const manifestBytes = await manifestFile.async('uint8array');
+      const encodeUtf16LE = (str: string): Uint8Array => {
+        const buf = new Uint8Array(str.length * 2);
+        for (let i = 0; i < str.length; i++) {
+          const code = str.charCodeAt(i);
+          buf[i * 2] = code & 0xff;
+          buf[i * 2 + 1] = (code >> 8) & 0xff;
+        }
+        return buf;
+      };
+
+      const sourcePkgU16 = encodeUtf16LE('net.mikespub.mywebview');
+      const targetPkgU16 = encodeUtf16LE(targetPackage);
+      const mainActivityU16 = encodeUtf16LE('net.mikespub.mywebview.MainActivity');
+
+      for (let i = 0; i <= manifestBytes.length - sourcePkgU16.length; i++) {
+        let match = true;
+        for (let j = 0; j < sourcePkgU16.length; j++) {
+          if (manifestBytes[i + j] !== sourcePkgU16[j]) { match = false; break; }
+        }
+        if (match) {
+          let isMain = true;
+          for (let j = 0; j < mainActivityU16.length; j++) {
+            if (manifestBytes[i + j] !== mainActivityU16[j]) { isMain = false; break; }
+          }
+          if (!isMain) {
+            manifestBytes.set(targetPkgU16, i);
+          }
         }
       }
-    } catch (iconErr) {
-      console.warn('[APK Builder] Icon embedding skipped:', iconErr);
+      zip.file('AndroidManifest.xml', manifestBytes);
+    } catch (mErr) {
+      console.warn('[APK Builder] AndroidManifest package patch skipped:', mErr);
     }
   }
 
-  // 8. Strip old signature files
+  // 9. Patch resources.arsc: Replace "My WebView" with user app name and link adaptive icon to custom PNG
+  const arscFile = zip.file('resources.arsc');
+  if (arscFile) {
+    try {
+      const arscBytes = await arscFile.async('uint8array');
+
+      // Replace app name in resources.arsc (UTF-8 string pool entry, exactly 13 bytes)
+      const sourceName = new Uint8Array([0x0a, 0x0a, 0x4d, 0x79, 0x20, 0x57, 0x65, 0x62, 0x56, 0x69, 0x65, 0x77, 0x00]);
+      const cleanTitle = appName.trim().replace(/[<>:"/\\|?*]/g, '') || 'App';
+      const nameUtf8 = new TextEncoder().encode(cleanTitle.substring(0, 10));
+      const targetName = new Uint8Array(13);
+      targetName[0] = nameUtf8.length;
+      targetName[1] = nameUtf8.length;
+      targetName.set(nameUtf8, 2);
+
+      for (let i = 0; i <= arscBytes.length - sourceName.length; i++) {
+        let match = true;
+        for (let j = 0; j < sourceName.length; j++) {
+          if (arscBytes[i + j] !== sourceName[j]) { match = false; break; }
+        }
+        if (match) {
+          arscBytes.set(targetName, i);
+        }
+      }
+
+      // Replace adaptive-icon foreground vector reference (res/Qr.xml -> res/pu.png, exactly 10 ASCII chars)
+      // This tells Android PackageParser and Google Play Protect to render the high-res PNG icon
+      const qrRef = new TextEncoder().encode('res/Qr.xml');
+      const puRef = new TextEncoder().encode('res/pu.png');
+      for (let i = 0; i <= arscBytes.length - qrRef.length; i++) {
+        let match = true;
+        for (let j = 0; j < qrRef.length; j++) {
+          if (arscBytes[i + j] !== qrRef[j]) { match = false; break; }
+        }
+        if (match) {
+          arscBytes.set(puRef, i);
+        }
+      }
+
+      zip.file('resources.arsc', arscBytes);
+    } catch (aErr) {
+      console.warn('[APK Builder] resources.arsc patch skipped:', aErr);
+    }
+  }
+
+  // 10. Generate high-resolution 512x512 PNG icon (from custom user upload or dynamic branded monogram)
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d');
+
+    if (ctx) {
+      if (logoBase64) {
+        const cleanBase64 = logoBase64.replace(/^data:image\/[a-zA-Z0-9.-]+;base64,/, '');
+        const img = new Image();
+        img.src = `data:image/png;base64,${cleanBase64}`;
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+        });
+        ctx.drawImage(img, 0, 0, 512, 512);
+      } else {
+        // Dynamic sleek branded monogram icon for app
+        const grad = ctx.createLinearGradient(0, 0, 512, 512);
+        grad.addColorStop(0, '#6366f1');
+        grad.addColorStop(1, '#a855f7');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 512, 512);
+
+        // App Initial
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 220px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const initial = (appName.trim().charAt(0) || 'A').toUpperCase();
+        ctx.fillText(initial, 256, 266);
+      }
+
+      const blob = await new Promise<Blob | null>(r => canvas.toBlob(r, 'image/png'));
+      if (blob) {
+        const iconBuffer = await blob.arrayBuffer();
+        const allLauncherIconPaths = [
+          'res/pu.png', 'res/8h.png', 'res/j4.png', 'res/tG.png', 'res/pk.png',
+          'res/0Z.png', 'res/9z.png', 'res/Ag.png', 'res/Ck.png', 'res/FW.png',
+          'res/Gf.png', 'res/MD.png', 'res/OX1.png', 'res/kp.png', 'res/nf.png',
+          'res/p8.png', 'res/5P.png', 'res/7m.png', 'res/OM.png', 'res/Pb.png',
+          'res/Y3.png', 'res/aU.png', 'res/zz.png', 'res/6d.png', 'res/6t.png',
+          'res/mipmap-xxxhdpi-v4/ic_launcher.png',
+          'res/mipmap-xxhdpi-v4/ic_launcher.png',
+          'res/mipmap-xhdpi-v4/ic_launcher.png',
+          'res/mipmap-hdpi-v4/ic_launcher.png',
+          'res/mipmap-mdpi-v4/ic_launcher.png',
+          'res/mipmap-xxxhdpi-v4/ic_launcher_round.png',
+          'res/mipmap-xxhdpi-v4/ic_launcher_round.png',
+          'res/mipmap-xhdpi-v4/ic_launcher_round.png',
+          'res/mipmap-hdpi-v4/ic_launcher_round.png',
+          'res/mipmap-mdpi-v4/ic_launcher_round.png',
+          'res/mipmap-xxxhdpi-v4/ic_launcher_foreground.png',
+          'res/mipmap-xxhdpi-v4/ic_launcher_foreground.png',
+          'res/mipmap-xhdpi-v4/ic_launcher_foreground.png',
+          'res/mipmap-hdpi-v4/ic_launcher_foreground.png',
+          'res/mipmap-mdpi-v4/ic_launcher_foreground.png',
+          'assets/demo/img/image.png'
+        ];
+        allLauncherIconPaths.forEach(p => zip.file(p, iconBuffer));
+      }
+    }
+  } catch (iconErr) {
+    console.warn('[APK Builder] Icon generation skipped:', iconErr);
+  }
+
+  // 11. Strip old signature files
   const filesToRemove = Object.keys(zip.files).filter(
     f => f.startsWith('META-INF/') && (f.endsWith('.SF') || f.endsWith('.RSA') || f.endsWith('.MF'))
   );
   filesToRemove.forEach(f => zip.remove(f));
 
-  // 9. Generate unsigned APK Uint8Array
+  // 12. Generate unsigned APK Uint8Array
   const unsignedBytes = await zip.generateAsync({
     type: 'uint8array',
     compression: 'DEFLATE',
     compressionOptions: { level: 6 }
   });
 
-  // 10. Cryptographically sign the APK using apk_sign_ts
+  // 13. Cryptographically sign the APK using apk_sign_ts
   const signResult = await signApk(unsignedBytes, keyStr, certStr);
   const signedBuffer = signResult.signedApk;
 

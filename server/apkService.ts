@@ -480,15 +480,13 @@ export async function generateSignedApk(
     // Both are exactly 10 ASCII characters, perfectly maintaining string pool integrity!
     // This allows modern Android (Poco C51, Android 13/14, MIUI) to render the crystal-clear
     // custom PNG logo inside the native Adaptive Icon squircle without blur or downsampling!
-    if (logoBase64) {
-      const arrowVectorRef = Buffer.from('res/Qr.xml', 'utf8');
-      const targetPngRef = Buffer.from('res/pu.png', 'utf8');
+    const arrowVectorRef = Buffer.from('res/Qr.xml', 'utf8');
+    const targetPngRef = Buffer.from('res/pu.png', 'utf8');
 
-      let xIdx = newArsc.indexOf(arrowVectorRef);
-      while (xIdx !== -1) {
-        targetPngRef.copy(newArsc, xIdx);
-        xIdx = newArsc.indexOf(arrowVectorRef, xIdx + targetPngRef.length);
-      }
+    let xIdx = newArsc.indexOf(arrowVectorRef);
+    while (xIdx !== -1) {
+      targetPngRef.copy(newArsc, xIdx);
+      xIdx = newArsc.indexOf(arrowVectorRef, xIdx + targetPngRef.length);
     }
 
     zip.file('resources.arsc', newArsc);

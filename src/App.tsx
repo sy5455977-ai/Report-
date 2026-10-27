@@ -475,7 +475,7 @@ export default function App() {
   });
 
   const [userApiKey, setUserApiKey] = useState<string>(() => {
-    return localStorage.getItem('blackbell_gemini_api_key') || '';
+    return localStorage.getItem('blackbell_gemini_api_key') || (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || '';
   });
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
 
@@ -1763,7 +1763,7 @@ export default function App() {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
     try {
-      const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || '';
+      const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || '';
       let res: Response | null = null;
       let backendFailed = false;
 
@@ -2390,7 +2390,7 @@ export default function App() {
         safeStopListening();
         currentTurnSpeechRef.current = '';
 
-        const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || '';
+        const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || '';
         if (!activeKey) {
           setError("Please configure your Gemini API Key in the top header to use voice conversation.");
           voiceStateRef.current = 'listening';

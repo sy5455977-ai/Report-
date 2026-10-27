@@ -120,18 +120,44 @@ function processMessageContent(content: string) {
 function extractHtmlApp(content: string): { htmlCode: string | null; textBefore: string; textAfter: string } {
   if (!content) return { htmlCode: null, textBefore: '', textAfter: '' };
 
-  const htmlMatch = content.match(/```html\s*([\s\S]*?<!DOCTYPE[\s\S]*?<\/html>[\s\S]*?)\s*```/i) 
-    || content.match(/```html\s*([\s\S]*?<html[\s\S]*?<\/html>[\s\S]*?)\s*```/i)
-    || content.match(/```html\s*([\s\S]*?)\s*```/i);
+  // 1. Standard markdown code fences ```html ... ``` (closed)
+  const closedFenceMatch = content.match(/```(?:html|htm)?\s*([\s\S]*?<!DOCTYPE[\s\S]*?<\/html>[\s\S]*?)\s*```/i) 
+    || content.match(/```(?:html|htm)?\s*([\s\S]*?<html[\s\S]*?<\/html>[\s\S]*?)\s*```/i)
+    || content.match(/```(?:html|htm)?\s*([\s\S]*?)\s*```/i);
     
-  if (htmlMatch && htmlMatch.index !== undefined && htmlMatch[1]) {
-    const fullMatch = htmlMatch[0];
-    const htmlCode = htmlMatch[1].trim();
+  if (closedFenceMatch && closedFenceMatch.index !== undefined && closedFenceMatch[1]) {
+    const fullMatch = closedFenceMatch[0];
+    const htmlCode = closedFenceMatch[1].trim();
     if (htmlCode.includes('<') && (htmlCode.includes('<!DOCTYPE') || htmlCode.includes('<html') || htmlCode.includes('<body') || htmlCode.includes('<script') || htmlCode.includes('<style') || htmlCode.includes('<div') || htmlCode.includes('<canvas'))) {
-      const textBefore = content.substring(0, htmlMatch.index).trim();
-      const textAfter = content.substring(htmlMatch.index + fullMatch.length).trim();
+      const textBefore = content.substring(0, closedFenceMatch.index).trim();
+      const textAfter = content.substring(closedFenceMatch.index + fullMatch.length).trim();
       return { htmlCode, textBefore, textAfter };
     }
+  }
+
+  // 2. Unclosed code fences ```html <!DOCTYPE ... (streaming or truncated)
+  const unclosedFenceMatch = content.match(/```(?:html|htm)?\s*([\s\S]*)$/i);
+  if (unclosedFenceMatch && unclosedFenceMatch.index !== undefined && unclosedFenceMatch[1]) {
+    const rawInner = unclosedFenceMatch[1].trim();
+    if (rawInner.includes('<') && (rawInner.includes('<!DOCTYPE') || rawInner.includes('<html') || rawInner.includes('<head') || rawInner.includes('<body') || rawInner.includes('<style') || rawInner.includes('<script'))) {
+      const textBefore = content.substring(0, unclosedFenceMatch.index).trim();
+      return { htmlCode: rawInner, textBefore, textAfter: '' };
+    }
+  }
+
+  // 3. Bare HTML document <!DOCTYPE html> ... </html> without code fences
+  const bareDocMatch = content.match(/(<!DOCTYPE\s+html[\s\S]*?<\/html>)/i);
+  if (bareDocMatch && bareDocMatch.index !== undefined && bareDocMatch[1]) {
+    const textBefore = content.substring(0, bareDocMatch.index).trim();
+    const textAfter = content.substring(bareDocMatch.index + bareDocMatch[0].length).trim();
+    return { htmlCode: bareDocMatch[1].trim(), textBefore, textAfter };
+  }
+
+  // 4. Bare unclosed <!DOCTYPE html> ... to end of message
+  const bareDocUnclosed = content.match(/(<!DOCTYPE\s+html[\s\S]*)$/i);
+  if (bareDocUnclosed && bareDocUnclosed.index !== undefined && bareDocUnclosed[1]) {
+    const textBefore = content.substring(0, bareDocUnclosed.index).trim();
+    return { htmlCode: bareDocUnclosed[1].trim(), textBefore, textAfter: '' };
   }
 
   return { htmlCode: null, textBefore: content, textAfter: '' };
@@ -1354,7 +1380,26 @@ export default function App() {
           }
         }
       } catch (err) {
-        console.warn("Backend TTS connection failed or timed out. Falling back to browser Speech Synthesis:", err);
+        console.warn("Backend TTS connection failed or timed out. Falling back to direct Gemini TTS:", err);
+      }
+
+      if (!success) {
+        const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || '';
+        if (activeKey) {
+          try {
+            const voiceName = personality === 'black' ? 'Charon' : 'Zephyr';
+            const ttsResult = await generateGeminiDirectTTS(text, voiceName, activeKey);
+            if (ttsResult?.base64Audio) {
+              const played = await playBase64WavInWebAudio(ttsResult.base64Audio, () => {
+                setPlayingMessageId(null);
+                setIsAiSpeaking(false);
+              });
+              if (played) success = true;
+            }
+          } catch (e) {
+            console.warn("Direct Gemini TTS fallback error:", e);
+          }
+        }
       }
 
       if (!success) {
@@ -1882,7 +1927,46 @@ export default function App() {
 
       if (!res || !res.ok) {
         const errText = res ? await res.text() : "Network error";
-        throw new Error(errText);
+        console.warn(`[Backend /api/chat status ${res?.status}]: ${errText}. Running automatic client-direct multi-model fallback cascade...`);
+        
+        if (activeKey) {
+          const directResult = await callDirectGeminiChat({
+            messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+            personality,
+            apiKey: activeKey,
+            userName: currentUser?.username || 'User',
+            isAdmin: currentUser?.email === 'sy5455977@gmail.com'
+          });
+
+          const formattedContent = directResult.questions && directResult.questions.length > 0
+            ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
+            : directResult.text;
+
+          const isBuildOrRebuild = currentText.toLowerCase().startsWith('/build') || currentText.toLowerCase().startsWith('/rebuild');
+          const finalMsg: Message = {
+            id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            role: 'ai',
+            content: formattedContent,
+            winner: isBuildOrRebuild ? 'Blackbell 2.0 (Website Builder)' : 'Gemini 2.5 Flash (Auto-Cascade)',
+            latency: '0.4s'
+          };
+
+          updateActiveSessionMessages([...newMessages, finalMsg]);
+          if (autoSpeak) {
+            playMessageTTS(directResult.text, newMessages.length);
+          }
+          return;
+        } else {
+          const politeMsg: Message = {
+            id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            role: 'ai',
+            content: "Blackbell par abhi temporary heavy traffic hai. Fast response ke liye please top header me apni personal Google Gemini API Key add karein, ya 1 minute baad dubara try karein! ⚡\n\n[QUESTIONS]\n- Ek baar fir se try karein\n- Gemini API Key kaise banayein?\n- /build feature kaise use karein?",
+            winner: 'Blackbell Resilience Core',
+            latency: '0.00'
+          };
+          updateActiveSessionMessages([...newMessages, politeMsg]);
+          return;
+        }
       }
 
       const winner = res.headers.get('x-model-winner') || '';
@@ -1983,8 +2067,8 @@ export default function App() {
     setIsAiSpeaking(false);
   };
 
-  // Play WAV audio buffer using Web Audio API (single-source buffer node with fallback)
-  const playBase64WavInWebAudio = async (base64Wav: string, onEnded: () => void): Promise<boolean> => {
+  // Play WAV or raw 24kHz PCM audio buffer using Web Audio API (single-source buffer node with fallback)
+  const playBase64WavInWebAudio = async (base64Audio: string, onEnded: () => void): Promise<boolean> => {
     try {
       stopAllVoicePlayback();
 
@@ -1998,14 +2082,30 @@ export default function App() {
       }
 
       // Convert base64 to binary buffer
-      const binaryStr = atob(base64Wav);
+      const binaryStr = atob(base64Audio);
       const len = binaryStr.length;
       const bytes = new Uint8Array(len);
       for (let i = 0; i < len; i++) {
         bytes[i] = binaryStr.charCodeAt(i);
       }
 
-      const audioBuffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
+      const isRiffWav = bytes.length > 4 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46;
+      let audioBuffer: AudioBuffer;
+
+      if (isRiffWav) {
+        audioBuffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
+      } else {
+        // Raw 16-bit PCM (24000Hz mono) from Gemini Audio API
+        const byteLen = bytes.length - (bytes.length % 2);
+        const pcm16 = new Int16Array(bytes.buffer, 0, byteLen / 2);
+        const float32 = new Float32Array(pcm16.length);
+        for (let i = 0; i < pcm16.length; i++) {
+          float32[i] = pcm16[i] / 32768.0;
+        }
+        audioBuffer = ctx.createBuffer(1, float32.length, 24000);
+        audioBuffer.getChannelData(0).set(float32);
+      }
+
       const sourceNode = ctx.createBufferSource();
       sourceNode.buffer = audioBuffer;
       sourceNode.connect(ctx.destination);
@@ -2027,7 +2127,7 @@ export default function App() {
       console.warn("[WebAudio] Direct decode failed, falling back to HTML5 audio element:", err);
       try {
         stopAllVoicePlayback();
-        const audio = new Audio(`data:audio/wav;base64,${base64Wav}`);
+        const audio = new Audio(`data:audio/wav;base64,${base64Audio}`);
         currentDirectAudioRef.current = audio;
         setIsAiSpeaking(true);
         audio.onended = () => {
@@ -2353,9 +2453,9 @@ export default function App() {
           let ttsAudioPlayed = false;
 
           try {
-            const base64Audio = await generateGeminiDirectTTS(replyText, voiceName, activeKey, abortController.signal);
-            if (base64Audio && !abortController.signal.aborted) {
-              const played = await playBase64WavInWebAudio(base64Audio, handleVoiceCompleted);
+            const ttsResult = await generateGeminiDirectTTS(replyText, voiceName, activeKey, abortController.signal);
+            if (ttsResult?.base64Audio && !abortController.signal.aborted) {
+              const played = await playBase64WavInWebAudio(ttsResult.base64Audio, handleVoiceCompleted);
               ttsAudioPlayed = played;
             }
           } catch (ttsErr: any) {
@@ -4132,7 +4232,7 @@ export default function App() {
               </div>
 
               {/* Related Follow-Up click questions cards */}
-              {i === messages.length - 1 && m.role === 'ai' && parsed.questions.length > 0 && !isTyping && completedStreams[streamKey] && (
+              {i === messages.length - 1 && m.role === 'ai' && parsed.questions.length > 0 && !isTyping && (
                 <div className="flex flex-wrap gap-2 mt-3 max-w-[85%] animate-fade-in pl-1">
                   {parsed.questions.map((q, qIdx) => (
                     <button

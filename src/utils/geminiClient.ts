@@ -263,7 +263,7 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
   }
 
   // Multi-model resilience chain: automatically cascades when a model experiences high demand, 503 spikes, or 429 quota limits
-  const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+  const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-2.0-flash'];
   let lastError: any = null;
 
   for (const model of models) {
@@ -294,18 +294,9 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
       if (!res.ok) {
         const errorJson = await res.json().catch(() => null);
         const errMsg = errorJson?.error?.message || `API returned status ${res.status}`;
-        
-        // If high demand (503), quota limits (429), or temporary spike, seamlessly cascade to next model
-        const isSpikeOrDemand = res.status === 503 || res.status === 429 || res.status === 500 || 
-          /high demand|spikes in demand|overloaded|resource has been exhausted|quota/i.test(errMsg);
-
-        if (isSpikeOrDemand) {
-          console.warn(`[Client-Direct Gemini] Model ${model} returned ${res.status} ("${errMsg}"). Automatically falling back to next model...`);
-          lastError = new Error(errMsg);
-          continue;
-        }
-
-        throw new Error(errMsg);
+        console.warn(`[Client-Direct Gemini] Model ${model} returned ${res.status} ("${errMsg}"). Automatically falling back to next model in chain...`);
+        lastError = new Error(errMsg);
+        continue;
       }
 
       const data = await res.json();
@@ -340,72 +331,69 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
   throw lastError || new Error('All Gemini fallback models were unable to respond. Please check your network or try again in a moment.');
 }
 
-// Track whether Gemini REST TTS is supported on the user's key to prevent repeated 404 delays
-let hasCheckedTtsSupport = false;
-let isTtsSupportedOnKey = true;
-
 // Direct client-side Gemini TTS generator for Bell & Black voices on Vercel and Netlify
 export async function generateGeminiDirectTTS(
   text: string,
   voiceName: 'Zephyr' | 'Charon' | string = 'Zephyr',
   apiKey: string,
   signal?: AbortSignal
-): Promise<string | null> {
+): Promise<{ base64Audio: string; isPcm: boolean } | null> {
   const cleanKey = apiKey.trim();
   if (!cleanKey || !text.trim() || signal?.aborted) return null;
-  if (hasCheckedTtsSupport && !isTtsSupportedOnKey) return null;
 
   // Clean out any questions marker or heavy punctuation before speaking
   const speechText = text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
   if (!speechText) return null;
 
-  try {
-    // 800ms strict timeout to avoid voice lag
-    const timeoutController = new AbortController();
-    const timer = setTimeout(() => timeoutController.abort(), 800);
+  const ttsModels = ['gemini-2.5-flash', 'gemini-2.0-flash'];
 
-    const onParentAbort = () => timeoutController.abort();
-    if (signal) signal.addEventListener('abort', onParentAbort);
+  for (const model of ttsModels) {
+    if (signal?.aborted) return null;
+    try {
+      const timeoutController = new AbortController();
+      const timer = setTimeout(() => timeoutController.abort(), 6000);
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${cleanKey}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: speechText }] }],
-        generationConfig: {
-          responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName }
+      const onParentAbort = () => timeoutController.abort();
+      if (signal) signal.addEventListener('abort', onParentAbort);
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: speechText }] }],
+          generationConfig: {
+            responseModalities: ["AUDIO"],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName }
+              }
             }
           }
-        }
-      }),
-      signal: timeoutController.signal
-    }).finally(() => {
-      clearTimeout(timer);
-      if (signal) signal.removeEventListener('abort', onParentAbort);
-    });
+        }),
+        signal: timeoutController.signal
+      }).finally(() => {
+        clearTimeout(timer);
+        if (signal) signal.removeEventListener('abort', onParentAbort);
+      });
 
-    hasCheckedTtsSupport = true;
-    if (!res.ok) {
-      isTtsSupportedOnKey = false;
-      return null;
-    }
+      if (!res.ok) {
+        continue;
+      }
 
-    const data = await res.json();
-    const base64Audio = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (base64Audio) {
-      isTtsSupportedOnKey = true;
-      return base64Audio;
+      const data = await res.json();
+      const inlineData = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+      const base64Audio = inlineData?.data;
+      if (base64Audio) {
+        const mimeType = inlineData?.mimeType || 'audio/pcm';
+        const isPcm = mimeType.includes('pcm') || !mimeType.includes('wav');
+        return { base64Audio, isPcm };
+      }
+    } catch (e: any) {
+      if (e?.name === 'AbortError' && signal?.aborted) {
+        return null;
+      }
     }
-  } catch (e: any) {
-    if (e?.name === 'AbortError' && signal?.aborted) {
-      return null;
-    }
-    hasCheckedTtsSupport = true;
-    isTtsSupportedOnKey = false;
   }
 
   return null;

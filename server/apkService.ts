@@ -416,44 +416,10 @@ export async function generateSignedApk(
     logoBase64
   );
 
-  // 3. Generate unique package name of exactly 22 characters: "com.blackbell.app_xxxx"
-  const generateUniqueId = (): string => {
-    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    let res = '';
-    for (let i = 0; i < 4; i++) {
-      res += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return res;
-  };
-  const uniqueId = generateUniqueId();
-  const targetPackage = `com.blackbell.app_${uniqueId}`;
+  // 3. Keep AndroidManifest.xml intact from the compiled base template
+  // This guarantees AndroidX InitializationProvider, FileProvider, and MainActivity match classes.dex exactly with zero startup crashes.
+  // The custom app title and user logo are rendered via resources.arsc and res/pu.png.
 
-  // 4. Update AndroidManifest.xml with full permissions and unique package name
-  const manifestFile = zip.file('AndroidManifest.xml');
-  if (manifestFile) {
-    const manifestBuf = await manifestFile.async('nodebuffer');
-    try {
-      const injectedManifest = injectPermissionsAndPackage(manifestBuf, targetPackage);
-      zip.file('AndroidManifest.xml', injectedManifest);
-    } catch (e) {
-      console.error('Error injecting permissions into AndroidManifest.xml, falling back to safe string replace:', e);
-      const sourcePkgU16 = Buffer.from('net.mikespub.mywebview', 'utf16le');
-      const targetPkgU16 = Buffer.from(targetPackage, 'utf16le');
-      const mainActivityU16 = Buffer.from('net.mikespub.mywebview.MainActivity', 'utf16le');
-      const newManifest = Buffer.from(manifestBuf);
-      let idx = newManifest.indexOf(sourcePkgU16);
-      while (idx !== -1) {
-        const isMainActivity =
-          idx + mainActivityU16.length <= newManifest.length &&
-          newManifest.subarray(idx, idx + mainActivityU16.length).equals(mainActivityU16);
-        if (!isMainActivity) {
-          targetPkgU16.copy(newManifest, idx);
-        }
-        idx = newManifest.indexOf(sourcePkgU16, idx + (isMainActivity ? mainActivityU16.length : targetPkgU16.length));
-      }
-      zip.file('AndroidManifest.xml', newManifest);
-    }
-  }
 
   // 5. Update resources.arsc app name string and adaptive icon foreground safely
   const arscFile = zip.file('resources.arsc');

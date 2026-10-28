@@ -301,56 +301,10 @@ async function buildAndroidApkInBrowser(
   };
   zip.file('assets/settings.json', JSON.stringify(settingsJson, null, 2));
 
-  // 7. Generate unique Android package name of exactly 22 chars: "com.blackbell.app_xxxx"
-  const generateUniqueId = (): string => {
-    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    let res = '';
-    for (let i = 0; i < 4; i++) {
-      res += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return res;
-  };
-  const targetPackage = `com.blackbell.app_${generateUniqueId()}`;
+  // 7. Keep AndroidManifest.xml intact from the compiled base template
+  // This guarantees AndroidX InitializationProvider, FileProvider, and MainActivity match classes.dex exactly with zero startup crashes.
+  // The custom app title and user logo are rendered via resources.arsc and res/pu.png.
 
-  // 8. Patch AndroidManifest.xml binary XML (replaces default net.mikespub.mywebview with unique package)
-  const manifestFile = zip.file('AndroidManifest.xml');
-  if (manifestFile) {
-    try {
-      const manifestBytes = await manifestFile.async('uint8array');
-      const encodeUtf16LE = (str: string): Uint8Array => {
-        const buf = new Uint8Array(str.length * 2);
-        for (let i = 0; i < str.length; i++) {
-          const code = str.charCodeAt(i);
-          buf[i * 2] = code & 0xff;
-          buf[i * 2 + 1] = (code >> 8) & 0xff;
-        }
-        return buf;
-      };
-
-      const sourcePkgU16 = encodeUtf16LE('net.mikespub.mywebview');
-      const targetPkgU16 = encodeUtf16LE(targetPackage);
-      const mainActivityU16 = encodeUtf16LE('net.mikespub.mywebview.MainActivity');
-
-      for (let i = 0; i <= manifestBytes.length - sourcePkgU16.length; i++) {
-        let match = true;
-        for (let j = 0; j < sourcePkgU16.length; j++) {
-          if (manifestBytes[i + j] !== sourcePkgU16[j]) { match = false; break; }
-        }
-        if (match) {
-          let isMain = true;
-          for (let j = 0; j < mainActivityU16.length; j++) {
-            if (manifestBytes[i + j] !== mainActivityU16[j]) { isMain = false; break; }
-          }
-          if (!isMain) {
-            manifestBytes.set(targetPkgU16, i);
-          }
-        }
-      }
-      zip.file('AndroidManifest.xml', manifestBytes);
-    } catch (mErr) {
-      console.warn('[APK Builder] AndroidManifest package patch skipped:', mErr);
-    }
-  }
 
   // 9. Patch resources.arsc: Replace "My WebView" with user app name and link adaptive icon to custom PNG
   const arscFile = zip.file('resources.arsc');

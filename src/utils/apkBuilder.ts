@@ -94,15 +94,12 @@ export async function buildAndroidApk(
         })
       });
 
-      const contentType = res.headers.get('content-type') || '';
-      const isHtmlRedirect = contentType.includes('text/html');
-
-      if (res.ok && !isHtmlRedirect && (contentType.includes('application/vnd.android.package-archive') || contentType.includes('application/octet-stream') || res.headers.get('X-Apk-Size-Mb'))) {
+      if (res.ok) {
         apkBlob = await res.blob();
         const sizeHeader = res.headers.get('X-Apk-Size-Mb');
         finalSizeMb = sizeHeader || (apkBlob.size / (1024 * 1024)).toFixed(2) + ' MB';
       } else {
-        console.info('[APK Builder] Server endpoint returned ' + (isHtmlRedirect ? 'static host HTML redirect' : res.status) + '. Activating in-browser client-side APK compiler...');
+        console.info('[APK Builder] Server endpoint returned ' + res.status + '. Activating in-browser client-side APK compiler...');
       }
     } catch (netErr) {
       console.info('[APK Builder] Server endpoint unreachable. Activating in-browser client-side APK compiler...', netErr);

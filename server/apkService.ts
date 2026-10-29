@@ -416,9 +416,41 @@ export async function generateSignedApk(
     logoBase64
   );
 
-  // 3. Keep AndroidManifest.xml intact from the compiled base template
-  // This guarantees AndroidX InitializationProvider, FileProvider, and MainActivity match classes.dex exactly with zero startup crashes.
-  // The custom app title and user logo are rendered via resources.arsc and res/pu.png.
+  // 3. Inject unique Package Name into AndroidManifest.xml
+  // Replaces 'net.mikespub.mywebview' with unique 22-character ID (e.g. 'com.blackbell.aXXXXXXX')
+  // while keeping 'net.mikespub.mywebview.MainActivity' intact so classes.dex matches.
+  // Guarantees Android OS treats each APK as a separate standalone app without prompting to update.
+  const manifestFile = zip.file('AndroidManifest.xml');
+  if (manifestFile) {
+    try {
+      const manifestBuf = await manifestFile.async('nodebuffer');
+      const modifiedManifest = Buffer.from(manifestBuf);
+
+      const randomSuffix = Math.random().toString(36).substring(2, 9).toLowerCase();
+      const targetPkg = `com.blackbell.a${randomSuffix}`;
+
+      const sourceU16 = Buffer.from('net.mikespub.mywebview', 'utf16le');
+      const targetU16 = Buffer.from(targetPkg, 'utf16le');
+      const mainActivityU16 = Buffer.from('net.mikespub.mywebview.MainActivity', 'utf16le');
+
+      let idx = 0;
+      while ((idx = modifiedManifest.indexOf(sourceU16, idx)) !== -1) {
+        const isMainActivity = (idx + mainActivityU16.length <= modifiedManifest.length) &&
+          modifiedManifest.subarray(idx, idx + mainActivityU16.length).equals(mainActivityU16);
+
+        if (!isMainActivity) {
+          targetU16.copy(modifiedManifest, idx);
+          idx += targetU16.length;
+        } else {
+          idx += mainActivityU16.length;
+        }
+      }
+
+      zip.file('AndroidManifest.xml', modifiedManifest);
+    } catch (mErr) {
+      console.warn('[Server APK Builder] AndroidManifest package injection warning:', mErr);
+    }
+  }
 
 
   // 5. Update resources.arsc app name string and adaptive icon foreground safely

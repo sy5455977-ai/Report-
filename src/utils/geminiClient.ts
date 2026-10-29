@@ -318,6 +318,44 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
           .slice(0, 3);
       }
 
+      // Guaranteed 3 follow-up suggestions fallback if LLM omitted [QUESTIONS]
+      if (questions.length === 0 && !isVoiceMode) {
+        const lowerText = (text + ' ' + userText).toLowerCase();
+        if (isBuilderMode || lowerText.includes('calculator') || lowerText.includes('calc')) {
+          if (lowerText.includes('calculator') || lowerText.includes('calc') || lowerText.includes('math')) {
+            questions = [
+              '/rebuild scientific calculator functions (sin, cos, log) add karo',
+              '/rebuild calculation history log panel add karo',
+              '/rebuild theme switcher (light/dark/neon) add karo'
+            ];
+          } else if (lowerText.includes('game') || lowerText.includes('score') || lowerText.includes('play')) {
+            questions = [
+              '/rebuild sound effects aur score animations add karo',
+              '/rebuild mobile touch controls improve karo',
+              '/rebuild restart and high score saving feature add karo'
+            ];
+          } else {
+            questions = [
+              '/rebuild modern dark/light theme switcher add karo',
+              '/rebuild mobile responsive layout and touch gestures improve karo',
+              '/rebuild sound effects aur interactive animations add karo'
+            ];
+          }
+        } else if (personality === 'black') {
+          questions = [
+            'Janab, iski agli ranneeti par vichaar karein?',
+            'Kya aap iska agla logical test perform karna chahte hain?',
+            'Iski core performance aur accuracy kaise optimize karein?'
+          ];
+        } else {
+          questions = [
+            'Arey waah! Chalo isme kuch aur naya add karte hain? 😉',
+            'Kya tumhein ye pasand aaya dost? Kuch aur changes karein? ✨',
+            'Ab aage kya explore karna chahte ho? ❤️'
+          ];
+        }
+      }
+
       return { text, questions };
     } catch (err: any) {
       if (err.name === 'AbortError' || signal?.aborted) {
@@ -341,15 +379,17 @@ export async function generateGeminiDirectTTS(
   const cleanKey = (apiKey && apiKey.trim()) || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '') || '';
   if (!cleanKey || !text.trim() || signal?.aborted) return null;
 
-  // Clean out any questions marker or heavy punctuation before speaking
-  const speechText = text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
+  // Clean out any questions marker, code blocks, or heavy punctuation before speaking
+  let speechText = text.split('[QUESTIONS]')[0];
+  // Strip code blocks so AI doesn't read out HTML tags or JavaScript aloud
+  speechText = speechText.replace(/```[\s\S]*?```/g, 'Aapka application ready hai. ');
+  speechText = speechText.replace(/<[^>]+>/g, ' ');
+  speechText = speechText.replace(/[*_#`~>]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!speechText) return null;
 
-  // Dedicated Google Gemini Text-to-Speech models that support audio modality
+  // Dedicated Google Gemini Text-to-Speech models with audio modality
   const ttsModels = [
-    'gemini-2.5-flash-preview-tts',
-    'gemini-3.8-flash-tts',
-    'gemini-3.1-flash-tts-preview'
+    'gemini-2.5-flash-preview-tts'
   ];
 
   for (const model of ttsModels) {

@@ -22,6 +22,57 @@ export function extractAppTitle(htmlCode: string, fallback: string = 'Boom ai'):
   return fallback && fallback.toLowerCase() !== 'index.html' ? fallback : 'Boom ai';
 }
 
+// Embedded cryptographic signing keys for client-side APK compilation on Netlify, Vercel & static hosting
+export const EMBEDDED_DEBUG_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCxtSuIoO5/vBa7
+csjx0dddhg/JkLTg/w54iCOI2MoYIxtTDgBRvdoeYzpDHwFmhqQNx4wlP3myAUwd
+aRPeMJASognRrCAGYTqI8trPXM3qRfLrKSqSW1H8mbfS/9IyuBNRGCs3ffqVADKu
+pp9dM9Qt2nJRu1K5bfxZXnRaVMFNDFp1ALZQE2CSjqJ5Z4Oy5M4kNyhF6VLeT1af
+AbbXHtek3iLRnL4B7gtXTp9F4AqPtfDkprya0oE81aBQk43EkGq92xSDi4KfQJQh
+oyQb+4wXDlRLE/admS8yeqcDJH0rq1d+K4aByS11jUflONgxCrS6M87+hGq1R5Zy
+nJXzw+DPAgMBAAECggEANwhTgH7SDTWq1obwCs9AwkI7jmDlWw4xpYsHciAsybfJ
+hPl/iNDiBOoWx2WJMf59PJUw5fIX1lPHhg4d7H+ehl6u6sNCsacXkQSgVXo4fJYH
+6eJ4QBXOuIrEHjBCIJnXxZPWAlvdp5oFmAear6rWyRJut7fqoOkaLnTtVHIN4LVw
+DICKVkt16uduMWRb+mrZOJinJ6vWvKGhERhZtrIgcIC65Z81T54i9Kqc/7O1TYG+
+Ze0fhtZ64D1CdV0SU2iNFxBcgIWi8m7Aal1AeiNOfwYkefis8SHaQsUUd0/l8FRa
+EVlxNfpVvS0vj6PRwqJFEXFhTfXrq/Mtb+dkJN+BSQKBgQDWI1wX8/R7KajaRT6M
+5nowz+xCLf/1zEAdggsNHcgQh8ukOVODYQoYe7vvdJF5R+i/QAveTw4Tu4JmidNv
+ZpJHUeyPpxL1wf+nUDDeQRm4Zhx6ZT946PEe7CAAptCCNA/Nn/b7hj3nqIKZrLZg
+3fHkBiY+u+8S/EYFKR9K6Yb2KQKBgQDUcqIEEmv5sbYyJdyfJjCb6TK3Hbub17kd
+FtC/skPGDWkIF3Yw7+WGQb4YMp/xvZMPErv8bJNFDOy+ZQHNPintNouNNOQGbWMY
+6fiyyAvhC3vQEgBGKF0r5aqSupkGMmCLvrCg9n3fzpTfXZubOT0VTMXwr+CuprMH
+uMThljDONwKBgQDA2B87wwtNT3ss9mcaZQVtqBJQlzSHm2WyLUbejQ97M5AFWUsI
+af+5hNT/FK9d1ZCZi4gksHUw+BC7Xyv2ixz49aJgzEma4RbnCqS3w1Dya6MB5uR+
+cumSu3smmxPz7ga9W24FniNp2Kuk0ZF9MuOAQrl2jbEEHATC6QGxaRWN4QKBgHYI
+6rNQeOVWM2BRYO6bjU5Slnbe8il4BcV/s6OOK9GSCdURE/3Ei8W4KSHQnsT1CwvI
+4OEygfBPagmunP2nmCvPrmFaDYb0p6Zj+GV8d/0lIDlOhxBzxLBq/gZf3j1vJ+z8
+ma4UxYLfiB9CJv5rIuD+ssszLKZcwAN+SQT9KUipAoGAJsusvyhWLW2q1V5UOx3l
+Zd0D6vSHMviHfkAHiZLQYTNB3qIgfdxEOpc0I6kxn7Uua22NPtcQt/WLfKTlsD6p
+augXvf/+zPWABRyTr0sRuooh9XqFEkbzJmRNHagZSkO2gQswiUu94d3LLzBd19FU
+2lVU1bsGnhGhQ7Wyf1JuOWc=
+-----END PRIVATE KEY-----`;
+
+export const EMBEDDED_DEBUG_CRT = `-----BEGIN CERTIFICATE-----
+MIIDUTCCAjmgAwIBAgIUOwXRB+z9xWRjmXjthHb9O3LlvY8wDQYJKoZIhvcNAQEL
+BQAwNzEWMBQGA1UEAwwNQW5kcm9pZCBEZWJ1ZzEQMA4GA1UECgwHQW5kcm9pZDEL
+MAkGA1UEBhMCVVMwIBcNMjYwOTI3MDcyMjUzWhgPMjA1NDAyMTIwNzIyNTNaMDcx
+FjAUBgNVBAMMDUFuZHJvaWQgRGVidWcxEDAOBgNVBAoMB0FuZHJvaWQxCzAJBgNV
+BAYTAlVTMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsbUriKDuf7wW
+u3LI8dHXXYYPyZC04P8OeIgjiNjKGCMbUw4AUb3aHmM6Qx8BZoakDceMJT95sgFM
+HWkT3jCQEqIJ0awgBmE6iPLaz1zN6kXy6ykqkltR/Jm30v/SMrgTURgrN336lQAy
+rqafXTPULdpyUbtSuW38WV50WlTBTQxadQC2UBNgko6ieWeDsuTOJDcoRelS3k9W
+nwG21x7XpN4i0Zy+Ae4LV06fReAKj7Xw5Ka8mtKBPNWgUJONxJBqvdsUg4uCn0CU
+IaMkG/uMFw5USxP2nZkvMnqnAyR9K6tXfiuGgcktdY1H5TjYMQq0ujPO/oRqtUeW
+cpyV88PgzwIDAQABo1MwUTAdBgNVHQ4EFgQUEbEYejnwBfmS7YJ0WGvEq4QG7Bgw
+HwYDVR0jBBgwFoAUEbEYejnwBfmS7YJ0WGvEq4QG7BgwDwYDVR0TAQH/BAUwAwEB
+/zANBgkqhkiG9w0BAQsFAAOCAQEAYdn+OZdhvCkmC0Q3cnMRS0Rs1NYDINbVTNkb
+ipW9UkP31X7dsz402phsWn9h1J2jh2+5oeTsTdUhDzQ2dsPm7d8KW8f85dd8ulpV
+2r68ibqIr692QTmF1E9DBP4O5Nu4nlbkLTCw19OfNQlmaWCeLBRqNEWheeWGm8Ty
+H3Hzm0g4l5ACxthp5S8aBr9LpFJGAqEkIg0sCH6/R8Syn9LHY3udTd2Cazv52H8O
+gUqsM7CB16oR/DUFk0413BEzJk7YbNipjtf2kQ8JIMZf0LVtqiPzbxFE4ov5Sl8R
+h43X/ND1F5veVf36xWeMMImbB1naNdG7f4v0+c7CfFd4dvprYw==
+-----END CERTIFICATE-----`;
+
 /**
  * Builds a real, compiled, signed Android Application Package (.apk) file containing the single-file HTML app.
  * Utilizes server-side compilation & v1 + v2 + v3 cryptographic signing so Android OS installs it without parse errors.
@@ -66,43 +117,39 @@ export async function buildAndroidApk(
   });
 
   try {
-    const res = await fetch('/api/build-apk', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        htmlCode,
-        appName: cleanTitle,
-        logoBase64
-      })
-    });
-
     let apkBlob: Blob | null = null;
     let finalSizeMb = '14.74 MB';
 
-    try {
-      const res = await fetch('/api/build-apk', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          htmlCode,
-          appName: cleanTitle,
-          logoBase64
-        })
-      });
+    const isStaticDeploy = typeof window !== 'undefined' && (
+      window.location.hostname.endsWith('netlify.app') ||
+      window.location.hostname.endsWith('vercel.app') ||
+      window.location.hostname.includes('hostinger')
+    );
 
-      if (res.ok) {
-        apkBlob = await res.blob();
-        const sizeHeader = res.headers.get('X-Apk-Size-Mb');
-        finalSizeMb = sizeHeader || (apkBlob.size / (1024 * 1024)).toFixed(2) + ' MB';
-      } else {
-        console.info('[APK Builder] Server endpoint returned ' + res.status + '. Activating in-browser client-side APK compiler...');
+    if (!isStaticDeploy) {
+      try {
+        const res = await fetch('/api/build-apk', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            htmlCode,
+            appName: cleanTitle,
+            logoBase64
+          })
+        });
+
+        if (res.ok) {
+          apkBlob = await res.blob();
+          const sizeHeader = res.headers.get('X-Apk-Size-Mb');
+          finalSizeMb = sizeHeader || (apkBlob.size / (1024 * 1024)).toFixed(2) + ' MB';
+        } else {
+          console.info('[APK Builder] Server endpoint returned ' + res.status + '. Activating in-browser client-side APK compiler...');
+        }
+      } catch (netErr) {
+        console.info('[APK Builder] Server endpoint unreachable. Activating in-browser client-side APK compiler...', netErr);
       }
-    } catch (netErr) {
-      console.info('[APK Builder] Server endpoint unreachable. Activating in-browser client-side APK compiler...', netErr);
     }
 
     // In-browser client-side compilation fallback (Runs seamlessly on Netlify, Vercel & static hosting)
@@ -162,22 +209,27 @@ async function buildAndroidApkInBrowser(
   const JSZip = JSZipModule.default || JSZipModule;
   const signApk = apkSignModule.signApk;
 
-  // 1. Fetch APK template and signing certificate/keys from static assets
-  const [templateRes, keyRes, certRes] = await Promise.all([
-    fetch('/templates/webview-template.apk'),
-    fetch('/templates/debug.key'),
-    fetch('/templates/debug.crt')
-  ]);
-
-  if (!templateRes.ok || !keyRes.ok || !certRes.ok) {
-    throw new Error('Could not load APK base template or signing keys.');
+  // 1. Fetch APK template from static assets (using embedded keys to avoid CDN/static host blocking)
+  let templateArrayBuffer: ArrayBuffer | null = null;
+  const templatePaths = ['/templates/webview-template.apk', './templates/webview-template.apk'];
+  for (const tPath of templatePaths) {
+    try {
+      const res = await fetch(tPath);
+      if (res.ok) {
+        templateArrayBuffer = await res.arrayBuffer();
+        break;
+      }
+    } catch (e) {
+      // Continue to next path
+    }
   }
 
-  const [templateArrayBuffer, keyStr, certStr] = await Promise.all([
-    templateRes.arrayBuffer(),
-    keyRes.text(),
-    certRes.text()
-  ]);
+  if (!templateArrayBuffer) {
+    throw new Error('Could not load APK base template.');
+  }
+
+  const keyStr = EMBEDDED_DEBUG_KEY;
+  const certStr = EMBEDDED_DEBUG_CRT;
 
   // 2. Open APK base with JSZip
   const zip = await JSZip.loadAsync(templateArrayBuffer);
@@ -323,25 +375,83 @@ async function buildAndroidApkInBrowser(
   zip.file('assets/settings.json', JSON.stringify(settingsJson, null, 2));
 
 
-  // 7. Keep AndroidManifest.xml intact from the compiled base template
-  // This guarantees AndroidX InitializationProvider, FileProvider, and MainActivity match classes.dex exactly with zero startup crashes.
-  // The custom app title and user logo are rendered via resources.arsc and res/pu.png.
+  // 7. Inject unique Package Name into AndroidManifest.xml
+  // Replaces 'net.mikespub.mywebview' with a unique 22-character ID (e.g. 'com.blackbell.aXXXXXXX')
+  // while keeping 'net.mikespub.mywebview.MainActivity' so classes.dex matches perfectly.
+  // This ensures Android treats every downloaded APK as a brand new standalone app and NEVER prompts to update!
+  const manifestFile = zip.file('AndroidManifest.xml');
+  if (manifestFile) {
+    try {
+      const manifestBytes = await manifestFile.async('uint8array');
+      const modifiedManifest = new Uint8Array(manifestBytes);
 
+      // Generate unique 22-character package name
+      // 'com.blackbell.a' (15) + 7 chars = 22 characters (exact match for net.mikespub.mywebview)
+      const randomSuffix = Math.random().toString(36).substring(2, 9).toLowerCase();
+      const targetPkg = `com.blackbell.a${randomSuffix}`;
 
-  // 9. Patch resources.arsc: Replace "My WebView" with user app name and link adaptive icon to custom PNG
+      // Encode UTF-16LE needles
+      const encodeUtf16Le = (str: string) => {
+        const buf = new Uint8Array(str.length * 2);
+        for (let i = 0; i < str.length; i++) {
+          const code = str.charCodeAt(i);
+          buf[i * 2] = code & 0xff;
+          buf[i * 2 + 1] = (code >> 8) & 0xff;
+        }
+        return buf;
+      };
+
+      const sourceU16 = encodeUtf16Le('net.mikespub.mywebview');
+      const targetU16 = encodeUtf16Le(targetPkg);
+      const mainActivityU16 = encodeUtf16Le('net.mikespub.mywebview.MainActivity');
+
+      for (let i = 0; i <= modifiedManifest.length - sourceU16.length; i++) {
+        let match = true;
+        for (let j = 0; j < sourceU16.length; j++) {
+          if (modifiedManifest[i + j] !== sourceU16[j]) { match = false; break; }
+        }
+
+        if (match) {
+          // Check if this occurrence is part of MainActivity class name in classes.dex
+          let isMainActivity = false;
+          if (i + mainActivityU16.length <= modifiedManifest.length) {
+            isMainActivity = true;
+            for (let k = 0; k < mainActivityU16.length; k++) {
+              if (modifiedManifest[i + k] !== mainActivityU16[k]) { isMainActivity = false; break; }
+            }
+          }
+
+          if (!isMainActivity) {
+            modifiedManifest.set(targetU16, i);
+            i += targetU16.length - 1;
+          } else {
+            i += mainActivityU16.length - 1;
+          }
+        }
+      }
+
+      zip.file('AndroidManifest.xml', modifiedManifest);
+    } catch (mErr) {
+      console.warn('[APK Builder] AndroidManifest.xml package injection warning:', mErr);
+    }
+  }
+
+  // 8. Patch resources.arsc: Replace "My WebView" with user app name and link adaptive icon to custom PNG
   const arscFile = zip.file('resources.arsc');
   if (arscFile) {
     try {
       const arscBytes = await arscFile.async('uint8array');
 
-      // Replace app name in resources.arsc (UTF-8 string pool entry, exactly 13 bytes)
+      // Replace app name in resources.arsc (UTF-8 string pool entry, exactly 13 bytes: 2 byte length + 10 byte text + 1 byte null)
       const sourceName = new Uint8Array([0x0a, 0x0a, 0x4d, 0x79, 0x20, 0x57, 0x65, 0x62, 0x56, 0x69, 0x65, 0x77, 0x00]);
       const cleanTitle = appName.trim().replace(/[<>:"/\\|?*]/g, '') || 'App';
-      const nameUtf8 = new TextEncoder().encode(cleanTitle.substring(0, 10));
+      const fixed10 = cleanTitle.length >= 10 ? cleanTitle.substring(0, 10) : cleanTitle.padEnd(10, ' ');
+      const nameUtf8 = new TextEncoder().encode(fixed10);
       const targetName = new Uint8Array(13);
-      targetName[0] = nameUtf8.length;
-      targetName[1] = nameUtf8.length;
-      targetName.set(nameUtf8, 2);
+      targetName[0] = 10;
+      targetName[1] = 10;
+      targetName.set(nameUtf8.subarray(0, 10), 2);
+      targetName[12] = 0x00;
 
       for (let i = 0; i <= arscBytes.length - sourceName.length; i++) {
         let match = true;

@@ -44,22 +44,49 @@ function getRelativeTime(timestamp: number) {
   return `${days} days ago`;
 }
 
-// Extract questions block from the raw AI response
+// Extract questions block from the raw AI response, ensuring 3 smart follow-up suggestions always exist
 function parseAiResponse(content: string) {
   if (!content) return { mainText: '', questions: [] as string[] };
   const marker = '[QUESTIONS]';
   const idx = content.indexOf(marker);
-  if (idx === -1) {
-    return { mainText: content, questions: [] as string[] };
+  let mainText = content;
+  let questions: string[] = [];
+
+  if (idx !== -1) {
+    mainText = content.substring(0, idx).trim();
+    const qText = content.substring(idx + marker.length).trim();
+    questions = qText
+      .split('\n')
+      .map(line => line.trim())
+      .map(line => line.replace(/^[-\*\d\.\)\s]+/, '').trim())
+      .filter(Boolean)
+      .slice(0, 3);
   }
-  const mainText = content.substring(0, idx).trim();
-  const qText = content.substring(idx + marker.length).trim();
-  const questions = qText
-    .split('\n')
-    .map(line => line.trim())
-    .map(line => line.replace(/^[-\*\d\.\)\s]+/, '').trim())
-    .filter(Boolean)
-    .slice(0, 3);
+
+  // Guaranteed 3 contextual follow-up action cards fallback (matches user requirements and screenshots)
+  if (questions.length === 0) {
+    const lower = content.toLowerCase();
+    if (lower.includes('calculator') || lower.includes('calc') || lower.includes('math') || lower.includes('hisaab')) {
+      questions = [
+        '/rebuild scientific calculator functions (sin, cos, log) add karo',
+        '/rebuild calculation history log panel add karo',
+        '/rebuild theme switcher (light/dark/neon) add karo'
+      ];
+    } else if (lower.includes('game') || lower.includes('canvas') || lower.includes('score') || lower.includes('player') || lower.includes('jump')) {
+      questions = [
+        '/rebuild sound effects aur score animations add karo',
+        '/rebuild mobile touch controls improve karo',
+        '/rebuild restart and high score saving feature add karo'
+      ];
+    } else if (lower.includes('<!doctype') || lower.includes('<html') || lower.includes('/build') || lower.includes('/rebuild') || lower.includes('index.html')) {
+      questions = [
+        '/rebuild modern dark/light theme switcher add karo',
+        '/rebuild mobile responsive layout and touch gestures improve karo',
+        '/rebuild sound effects aur interactive animations add karo'
+      ];
+    }
+  }
+
   return { mainText, questions };
 }
 
@@ -116,6 +143,16 @@ function processMessageContent(content: string) {
   return { cleanText, imageUrls };
 }
 
+// Safely close unclosed HTML tags if streaming or model response stopped before completion
+function autoCloseHtml(raw: string): string {
+  let s = raw.trim();
+  if (s.includes('<style') && !s.includes('</style>')) s += '\n</style>';
+  if (s.includes('<script') && !s.includes('</script>')) s += '\n</script>';
+  if (s.includes('<body') && !s.includes('</body>')) s += '\n</body>';
+  if (s.includes('<html') && !s.includes('</html>')) s += '\n</html>';
+  return s;
+}
+
 // Extract single-file index.html web app if present in the message
 function extractHtmlApp(content: string): { htmlCode: string | null; textBefore: string; textAfter: string } {
   if (!content) return { htmlCode: null, textBefore: '', textAfter: '' };
@@ -131,7 +168,7 @@ function extractHtmlApp(content: string): { htmlCode: string | null; textBefore:
     if (htmlCode.includes('<') && (htmlCode.includes('<!DOCTYPE') || htmlCode.includes('<html') || htmlCode.includes('<body') || htmlCode.includes('<script') || htmlCode.includes('<style') || htmlCode.includes('<div') || htmlCode.includes('<canvas'))) {
       const textBefore = content.substring(0, closedFenceMatch.index).trim();
       const textAfter = content.substring(closedFenceMatch.index + fullMatch.length).trim();
-      return { htmlCode, textBefore, textAfter };
+      return { htmlCode: autoCloseHtml(htmlCode), textBefore, textAfter };
     }
   }
 
@@ -141,7 +178,7 @@ function extractHtmlApp(content: string): { htmlCode: string | null; textBefore:
     const rawInner = unclosedFenceMatch[1].trim();
     if (rawInner.includes('<') && (rawInner.includes('<!DOCTYPE') || rawInner.includes('<html') || rawInner.includes('<head') || rawInner.includes('<body') || rawInner.includes('<style') || rawInner.includes('<script'))) {
       const textBefore = content.substring(0, unclosedFenceMatch.index).trim();
-      return { htmlCode: rawInner, textBefore, textAfter: '' };
+      return { htmlCode: autoCloseHtml(rawInner), textBefore, textAfter: '' };
     }
   }
 
@@ -157,7 +194,7 @@ function extractHtmlApp(content: string): { htmlCode: string | null; textBefore:
   const bareDocUnclosed = content.match(/(<!DOCTYPE\s+html[\s\S]*)$/i);
   if (bareDocUnclosed && bareDocUnclosed.index !== undefined && bareDocUnclosed[1]) {
     const textBefore = content.substring(0, bareDocUnclosed.index).trim();
-    return { htmlCode: bareDocUnclosed[1].trim(), textBefore, textAfter: '' };
+    return { htmlCode: autoCloseHtml(bareDocUnclosed[1].trim()), textBefore, textAfter: '' };
   }
 
   return { htmlCode: null, textBefore: content, textAfter: '' };
@@ -1327,66 +1364,75 @@ export default function App() {
       nextStartTimeRef.current = outputCtx.currentTime;
 
       let success = false;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => {
-        controller.abort();
-      }, 8000);
+      const isStaticDeploy = typeof window !== 'undefined' && (
+        window.location.hostname.endsWith('netlify.app') ||
+        window.location.hostname.endsWith('vercel.app') ||
+        window.location.hostname.includes('hostinger')
+      );
 
-      try {
-        const response = await fetch('/api/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            text, 
-            voice: personality === 'black' ? 'Charon' : 'Zephyr',
-            personality
-          }),
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-        if (response.ok) {
-          const data = await response.json();
-          if (data.audio) {
-            // High-fidelity native audio playback for complete WAV files
-            if (data.format === 'wav' || data.audio.startsWith('UklGR')) {
-              try {
-                const audio = new Audio(`data:audio/wav;base64,${data.audio}`);
-                audio.onended = () => {
-                  setPlayingMessageId(null);
-                  setIsAiSpeaking(false);
-                };
-                audio.onerror = () => {
+      // On full-stack servers, use backend TTS endpoint; on Netlify/Vercel static hosts, bypass immediately
+      if (!isStaticDeploy) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          controller.abort();
+        }, 3000);
+
+        try {
+          const response = await fetch('/api/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              text, 
+              voice: personality === 'black' ? 'Charon' : 'Aoede',
+              personality
+            }),
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          if (response.ok) {
+            const data = await response.json();
+            if (data.audio) {
+              if (data.format === 'wav' || data.audio.startsWith('UklGR')) {
+                try {
+                  const audio = new Audio(`data:audio/wav;base64,${data.audio}`);
+                  audio.onended = () => {
+                    setPlayingMessageId(null);
+                    setIsAiSpeaking(false);
+                  };
+                  audio.onerror = () => {
+                    playAudioChunk(data.audio, () => {
+                      setPlayingMessageId(null);
+                      setIsAiSpeaking(false);
+                    });
+                  };
+                  await audio.play();
+                  success = true;
+                } catch (audioErr) {
                   playAudioChunk(data.audio, () => {
                     setPlayingMessageId(null);
                     setIsAiSpeaking(false);
                   });
-                };
-                await audio.play();
-                success = true;
-              } catch (audioErr) {
+                  success = true;
+                }
+              } else {
                 playAudioChunk(data.audio, () => {
                   setPlayingMessageId(null);
                   setIsAiSpeaking(false);
                 });
                 success = true;
               }
-            } else {
-              playAudioChunk(data.audio, () => {
-                setPlayingMessageId(null);
-                setIsAiSpeaking(false);
-              });
-              success = true;
             }
           }
+        } catch (err) {
+          // Fall through smoothly to direct Gemini TTS
         }
-      } catch (err) {
-        console.warn("Backend TTS connection failed or timed out. Falling back to direct Gemini TTS:", err);
       }
 
       if (!success) {
         const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || (typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : '') || '';
         if (activeKey) {
           try {
+            // Strictly masculine Charon for Black, feminine Aoede for Bell
             const voiceName = personality === 'black' ? 'Charon' : 'Aoede';
             const ttsResult = await generateGeminiDirectTTS(text, voiceName, activeKey);
             if (ttsResult?.base64Audio) {
@@ -2099,11 +2145,11 @@ export default function App() {
         audioBuffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
       } else {
         // Raw 16-bit PCM (24000Hz mono) from Gemini Audio API
-        const byteLen = bytes.length - (bytes.length % 2);
-        const pcm16 = new Int16Array(bytes.buffer, 0, byteLen / 2);
-        const float32 = new Float32Array(pcm16.length);
-        for (let i = 0; i < pcm16.length; i++) {
-          float32[i] = pcm16[i] / 32768.0;
+        const sampleCount = Math.floor(bytes.length / 2);
+        const float32 = new Float32Array(sampleCount);
+        const dataView = new DataView(bytes.buffer, bytes.byteOffset, sampleCount * 2);
+        for (let i = 0; i < sampleCount; i++) {
+          float32[i] = dataView.getInt16(i * 2, true) / 32768.0;
         }
         audioBuffer = ctx.createBuffer(1, float32.length, 24000);
         audioBuffer.getChannelData(0).set(float32);
@@ -2521,7 +2567,7 @@ export default function App() {
           currentTurnSpeechRef.current = text;
           setVoiceTranscription(text);
 
-          const pauseThreshold = hasFinalResult ? 550 : 800;
+          const pauseThreshold = hasFinalResult ? 400 : 650;
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           silenceTimerRef.current = setTimeout(() => {
             executeTurnResponse();
@@ -2540,20 +2586,12 @@ export default function App() {
         isRecognitionActiveRef.current = false;
         if (!isDirectVoiceActiveRef.current || mode !== 'voice') return;
 
-        // If user has pending speech, allow silenceTimer to complete before firing turn response
+        // If user already spoke a phrase, execute immediately without mic flapping/toggle restart
         if (voiceStateRef.current === 'listening' && currentTurnSpeechRef.current.trim().length >= 2) {
-          if (!silenceTimerRef.current) {
-            silenceTimerRef.current = setTimeout(() => {
-              executeTurnResponse();
-            }, 700);
-          }
-          // On mobile Android, speech recognition may end between pauses. Restart seamlessly to capture remaining words
-          if (isRecordingRef.current) {
-            if (restartDebounceTimerRef.current) clearTimeout(restartDebounceTimerRef.current);
-            restartDebounceTimerRef.current = setTimeout(() => {
-              safeStartListening();
-            }, 300);
-          }
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = setTimeout(() => {
+            executeTurnResponse();
+          }, 250);
           return;
         }
 
@@ -4240,15 +4278,15 @@ export default function App() {
 
               {/* Related Follow-Up click questions cards */}
               {i === messages.length - 1 && m.role === 'ai' && parsed.questions.length > 0 && !isTyping && (
-                <div className="flex flex-wrap gap-2 mt-3 max-w-[85%] animate-fade-in pl-1">
+                <div className="flex flex-col gap-2.5 mt-3.5 max-w-[85%] w-full animate-fade-in pl-1">
                   {parsed.questions.map((q, qIdx) => (
                     <button
                       key={qIdx}
                       onClick={() => handleSendMessage(q)}
-                      className={`text-xs px-3.5 py-2 rounded-xl transition-all shadow-md text-left cursor-pointer font-medium active:scale-95 animate-fade-in border ${
+                      className={`text-xs px-4 py-3 rounded-xl transition-all shadow-md text-left cursor-pointer font-medium active:scale-[0.98] animate-fade-in border w-full ${
                         theme === 'light' 
-                          ? 'bg-white hover:bg-gray-50 text-purple-650 border-purple-200 hover:border-purple-300' 
-                          : 'bg-[#111] hover:bg-[#1a1a1a] text-purple-300 hover:text-white border border-[#a855f7]/15 hover:border-[#a855f7]/30'
+                          ? 'bg-white hover:bg-purple-50/50 text-purple-700 border-purple-200/80 hover:border-purple-300 shadow-sm' 
+                          : 'bg-[#121217] hover:bg-[#181822] text-purple-200 hover:text-white border border-[#a855f7]/25 hover:border-[#a855f7]/45'
                       }`}
                     >
                       {q}

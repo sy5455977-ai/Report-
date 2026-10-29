@@ -95,6 +95,7 @@ const fastModels = ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-pro
     const errors: any[] = [];
     // Ultra-fast Blackbell 2.0 Web Builder Engine (gemini-3.8-flash completely removed to eliminate quota exhaustion & latency)
     const modelsToTry = [
+      "gemini-2.5-flash",
       "gemini-3.1-flash-lite",
       "gemini-flash-latest"
     ];
@@ -102,11 +103,12 @@ const fastModels = ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-pro
       try {
         const config: any = {
           systemInstruction: instructionText,
-          temperature: 0.2
+          temperature: 0.2,
+          maxOutputTokens: 8192
         };
         if (modelName === "gemini-3.1-flash-lite") {
           config.thinkingConfig = { thinkingLevel: ThinkingLevel.MINIMAL };
-        } else {
+        } else if (modelName !== "gemini-2.5-flash") {
           config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
         }
 
@@ -256,6 +258,7 @@ At the very end of your response, provide exactly 3 future-oriented /rebuild sug
     const errors: any[] = [];
     // Ultra-fast Blackbell 2.0 Web Rebuilder Engine (gemini-3.8-flash completely removed to eliminate quota exhaustion & latency)
     const modelsToTry = [
+      "gemini-2.5-flash",
       "gemini-3.1-flash-lite",
       "gemini-flash-latest"
     ];
@@ -263,11 +266,12 @@ At the very end of your response, provide exactly 3 future-oriented /rebuild sug
       try {
         const config: any = {
           systemInstruction: instructionText,
-          temperature: 0.2
+          temperature: 0.2,
+          maxOutputTokens: 8192
         };
         if (modelName === "gemini-3.1-flash-lite") {
           config.thinkingConfig = { thinkingLevel: ThinkingLevel.MINIMAL };
-        } else {
+        } else if (modelName !== "gemini-2.5-flash") {
           config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
         }
 
@@ -453,7 +457,11 @@ ${modifiedHtml}
 
 function ensureQuestionsBlock(text: string): string {
   if (text.includes("[QUESTIONS]")) return text;
-  return `${text}\n\n[QUESTIONS]\n- /rebuild isme sound effects add karo\n- /rebuild mobile touch controls improve karo\n- /rebuild dark mode toggle add karo`;
+  const lower = text.toLowerCase();
+  if (lower.includes('calculator') || lower.includes('calc') || lower.includes('math')) {
+    return `${text}\n\n[QUESTIONS]\n- /rebuild scientific calculator functions (sin, cos, log) add karo\n- /rebuild calculation history log panel add karo\n- /rebuild theme switcher (light/dark/neon) add karo`;
+  }
+  return `${text}\n\n[QUESTIONS]\n- /rebuild isme sound effects aur score animations add karo\n- /rebuild mobile touch controls improve karo\n- /rebuild dark mode toggle add karo`;
 }
 
 function generateFallbackApp(title: string): string {

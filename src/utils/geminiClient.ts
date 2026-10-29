@@ -263,7 +263,7 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
   }
 
   // Multi-model resilience chain: automatically cascades when a model experiences high demand, 503 spikes, or 429 quota limits
-  const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-2.0-flash'];
+  const models = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
   let lastError: any = null;
 
   for (const model of models) {
@@ -389,8 +389,14 @@ export async function generateGeminiDirectTTS(
 
   // Dedicated Google Gemini Text-to-Speech models with audio modality
   const ttsModels = [
-    'gemini-2.5-flash-preview-tts'
+    'gemini-3.8-flash-lite-tts',
+    'gemini-3.8-flash-tts'
   ];
+
+  // Map requested voice to official prebuilt voice
+  const officialVoice = (voiceName.toLowerCase() === 'charon' || voiceName.toLowerCase() === 'black')
+    ? 'Charon'
+    : 'Kore';
 
   for (const model of ttsModels) {
     if (signal?.aborted) return null;
@@ -411,7 +417,7 @@ export async function generateGeminiDirectTTS(
             responseModalities: ["AUDIO"],
             speechConfig: {
               voiceConfig: {
-                prebuiltVoiceConfig: { voiceName }
+                prebuiltVoiceConfig: { voiceName: officialVoice }
               }
             }
           }

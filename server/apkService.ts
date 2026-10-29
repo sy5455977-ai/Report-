@@ -474,19 +474,7 @@ export async function generateSignedApk(
       nameIdx = newArsc.indexOf(sourceArscName, nameIdx + targetArscName.length);
     }
 
-    // Replace adaptive-icon foreground vector reference (res/Qr.xml -> res/pu.png)
-    // Both are exactly 10 ASCII characters, perfectly maintaining string pool integrity!
-    // This allows modern Android (Poco C51, Android 13/14, MIUI) to render the crystal-clear
-    // custom PNG logo inside the native Adaptive Icon squircle without blur or downsampling!
-    const arrowVectorRef = Buffer.from('res/Qr.xml', 'utf8');
-    const targetPngRef = Buffer.from('res/pu.png', 'utf8');
-
-    let xIdx = newArsc.indexOf(arrowVectorRef);
-    while (xIdx !== -1) {
-      targetPngRef.copy(newArsc, xIdx);
-      xIdx = newArsc.indexOf(arrowVectorRef, xIdx + targetPngRef.length);
-    }
-
+    // Keep XML drawables in resources.arsc intact to prevent Android InflateException
     zip.file('resources.arsc', newArsc);
   }
 
@@ -606,9 +594,22 @@ export async function generateSignedApk(
     { url: 'https://appassets.androidplatform.net/sites/demo/test.html', title: cleanTitle },
     { url: 'https://appassets.androidplatform.net/sites/web/index.html', title: cleanTitle }
   ];
+  settingsJson.other = 'https://appassets.androidplatform.net/sites/local/index.html';
+  settingsJson.match = [
+    ['host', 'equals', 'appassets.androidplatform.net'],
+    ['host', 'equals', 'github.com'],
+    ['host', 'endsWith', 'html5test.co']
+  ];
+  settingsJson.skip = [
+    ['path', 'endsWith', '.epub']
+  ];
   settingsJson.local_sites = true;
   settingsJson.remote_debug = false;
   settingsJson.console_log = true;
+  settingsJson.js_interface = true;
+  settingsJson.context_menu = false;
+  settingsJson.not_matching = false;
+  settingsJson.update_zip = '';
   settingsJson.web_settings = {
     JavaScriptEnabled: true,
     DomStorageEnabled: true,

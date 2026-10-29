@@ -334,24 +334,29 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
 // Direct client-side Gemini TTS generator for Bell & Black voices on Vercel and Netlify
 export async function generateGeminiDirectTTS(
   text: string,
-  voiceName: 'Zephyr' | 'Charon' | string = 'Zephyr',
-  apiKey: string,
+  voiceName: string = 'Aoede',
+  apiKey?: string,
   signal?: AbortSignal
 ): Promise<{ base64Audio: string; isPcm: boolean } | null> {
-  const cleanKey = apiKey.trim();
+  const cleanKey = (apiKey && apiKey.trim()) || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '') || '';
   if (!cleanKey || !text.trim() || signal?.aborted) return null;
 
   // Clean out any questions marker or heavy punctuation before speaking
   const speechText = text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
   if (!speechText) return null;
 
-  const ttsModels = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+  // Dedicated Google Gemini Text-to-Speech models that support audio modality
+  const ttsModels = [
+    'gemini-2.5-flash-preview-tts',
+    'gemini-3.8-flash-tts',
+    'gemini-3.1-flash-tts-preview'
+  ];
 
   for (const model of ttsModels) {
     if (signal?.aborted) return null;
     try {
       const timeoutController = new AbortController();
-      const timer = setTimeout(() => timeoutController.abort(), 6000);
+      const timer = setTimeout(() => timeoutController.abort(), 8000);
 
       const onParentAbort = () => timeoutController.abort();
       if (signal) signal.addEventListener('abort', onParentAbort);
@@ -376,6 +381,7 @@ export async function generateGeminiDirectTTS(
         clearTimeout(timer);
         if (signal) signal.removeEventListener('abort', onParentAbort);
       });
+
 
       if (!res.ok) {
         continue;

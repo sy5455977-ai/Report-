@@ -251,10 +251,23 @@ async function buildAndroidApkInBrowser(
     modifiedHtml = `${backgroundEngineScript}\n${modifiedHtml}`;
   }
 
-  // 4. Inject modified HTML into all webview root entrypoints
+  // 4. Overwrite ALL HTML files in the APK template with the user's application
+  // This guarantees that whether Android WebView loads local/index.html, local/sites.html, demo/index.html, or demo/test.html,
+  // it will ALWAYS load the user's created application and NEVER the original template demo/sample pages!
+  Object.keys(zip.files).forEach(filePath => {
+    if (filePath.endsWith('.html') || filePath.endsWith('.htm')) {
+      zip.file(filePath, modifiedHtml);
+    }
+  });
+
+  // Explicitly ensure standard entry points are populated
   zip.file('assets/demo/index.html', modifiedHtml);
+  zip.file('assets/demo/test.html', modifiedHtml);
   zip.file('assets/local/index.html', modifiedHtml);
+  zip.file('assets/local/sites.html', modifiedHtml);
+  zip.file('assets/local/result.html', modifiedHtml);
   zip.file('assets/web/index.html', modifiedHtml);
+  zip.file('assets/web/about.html', modifiedHtml);
 
   // 5. Update Web Manifest & Config
   const webManifest = {
@@ -274,8 +287,10 @@ async function buildAndroidApkInBrowser(
 
   const localConfig = {
     sites: {
-      'demo/index.html': appName,
       'local/index.html': appName,
+      'local/sites.html': appName,
+      'demo/index.html': appName,
+      'demo/test.html': appName,
       'web/index.html': appName
     },
     bundles: [],
@@ -283,9 +298,15 @@ async function buildAndroidApkInBrowser(
   };
   zip.file('assets/local/config.json', JSON.stringify(localConfig, null, 2));
 
-  // 6. Update settings.json
+  // 6. Update settings.json: Point all primary and alternative site roots to user's app
   let settingsJson: any = {
-    sites: [{ url: 'https://appassets.androidplatform.net/sites/local/index.html', title: appName }],
+    sites: [
+      { url: 'https://appassets.androidplatform.net/sites/local/index.html', title: appName },
+      { url: 'https://appassets.androidplatform.net/sites/local/sites.html', title: appName },
+      { url: 'https://appassets.androidplatform.net/sites/demo/index.html', title: appName },
+      { url: 'https://appassets.androidplatform.net/sites/demo/test.html', title: appName },
+      { url: 'https://appassets.androidplatform.net/sites/web/index.html', title: appName }
+    ],
     local_sites: true,
     remote_debug: false,
     console_log: true,
@@ -300,6 +321,7 @@ async function buildAndroidApkInBrowser(
     timestamp: new Date().toISOString()
   };
   zip.file('assets/settings.json', JSON.stringify(settingsJson, null, 2));
+
 
   // 7. Keep AndroidManifest.xml intact from the compiled base template
   // This guarantees AndroidX InitializationProvider, FileProvider, and MainActivity match classes.dex exactly with zero startup crashes.

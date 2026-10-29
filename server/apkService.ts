@@ -520,10 +520,22 @@ export async function generateSignedApk(
     }
   }
 
-  // 7. Inject HTML code into all webview root entrypoints
+  // 7. Overwrite ALL HTML files in the APK template with the user's application
+  // This guarantees that whether Android WebView loads local/index.html, local/sites.html, demo/index.html, or demo/test.html,
+  // it will ALWAYS load the user's created application and NEVER the original template demo/sample pages!
+  Object.keys(zip.files).forEach(filePath => {
+    if (filePath.endsWith('.html') || filePath.endsWith('.htm')) {
+      zip.file(filePath, modifiedHtml);
+    }
+  });
+
   zip.file('assets/demo/index.html', modifiedHtml);
+  zip.file('assets/demo/test.html', modifiedHtml);
   zip.file('assets/local/index.html', modifiedHtml);
+  zip.file('assets/local/sites.html', modifiedHtml);
+  zip.file('assets/local/result.html', modifiedHtml);
   zip.file('assets/web/index.html', modifiedHtml);
+  zip.file('assets/web/about.html', modifiedHtml);
 
   // 8. Inject dynamic manifest.json and local config.json
   const manifestJsonStr = JSON.stringify(webManifest, null, 2);
@@ -531,7 +543,18 @@ export async function generateSignedApk(
   zip.file('assets/demo/manifest.json', manifestJsonStr);
   zip.file('assets/local/manifest.json', manifestJsonStr);
   zip.file('assets/web/manifest.json', manifestJsonStr);
-  zip.file('assets/local/config.json', JSON.stringify(localConfig, null, 2));
+  const updatedLocalConfig = {
+    sites: {
+      'local/index.html': cleanTitle,
+      'local/sites.html': cleanTitle,
+      'demo/index.html': cleanTitle,
+      'demo/test.html': cleanTitle,
+      'web/index.html': cleanTitle
+    },
+    bundles: [],
+    prefix: 'https://appassets.androidplatform.net/sites/'
+  };
+  zip.file('assets/local/config.json', JSON.stringify(updatedLocalConfig, null, 2));
 
   // 9. Update settings.json with configured app title and local assets
   let settingsJson: any = {};
@@ -545,10 +568,11 @@ export async function generateSignedApk(
   }
 
   settingsJson.sites = [
-    {
-      url: 'https://appassets.androidplatform.net/sites/local/index.html',
-      title: cleanTitle
-    }
+    { url: 'https://appassets.androidplatform.net/sites/local/index.html', title: cleanTitle },
+    { url: 'https://appassets.androidplatform.net/sites/local/sites.html', title: cleanTitle },
+    { url: 'https://appassets.androidplatform.net/sites/demo/index.html', title: cleanTitle },
+    { url: 'https://appassets.androidplatform.net/sites/demo/test.html', title: cleanTitle },
+    { url: 'https://appassets.androidplatform.net/sites/web/index.html', title: cleanTitle }
   ];
   settingsJson.local_sites = true;
   settingsJson.remote_debug = false;
@@ -562,6 +586,7 @@ export async function generateSignedApk(
   };
   settingsJson.source = 'assets';
   settingsJson.timestamp = new Date().toISOString();
+
 
   zip.file('assets/settings.json', JSON.stringify(settingsJson, null, 2));
 

@@ -1384,10 +1384,10 @@ export default function App() {
       }
 
       if (!success) {
-        const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || '';
+        const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || (typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : '') || '';
         if (activeKey) {
           try {
-            const voiceName = personality === 'black' ? 'Charon' : 'Zephyr';
+            const voiceName = personality === 'black' ? 'Charon' : 'Aoede';
             const ttsResult = await generateGeminiDirectTTS(text, voiceName, activeKey);
             if (ttsResult?.base64Audio) {
               const played = await playBase64WavInWebAudio(ttsResult.base64Audio, () => {
@@ -1412,7 +1412,7 @@ export default function App() {
           let chosenVoice = null;
           if (personality === 'black') {
             chosenVoice = voices.find(v => 
-              (v.name.toLowerCase().includes('male') || v.name.toLowerCase().includes('david') || v.name.toLowerCase().includes('george') || v.name.toLowerCase().includes('guy') || v.name.toLowerCase().includes('rishi')) && !v.name.toLowerCase().includes('female')
+              (v.name.toLowerCase().includes('male') || v.name.toLowerCase().includes('david') || v.name.toLowerCase().includes('george') || v.name.toLowerCase().includes('guy') || v.name.toLowerCase().includes('rishi') || v.name.toLowerCase().includes('prabhat')) && !v.name.toLowerCase().includes('female')
             ) || voices.find(v => v.lang.startsWith('hi')) || voices[0];
           } else {
             chosenVoice = voices.find(v => 
@@ -1426,6 +1426,9 @@ export default function App() {
           
           if (chosenVoice) {
             utterance.voice = chosenVoice;
+            utterance.lang = chosenVoice.lang || (personality === 'black' ? 'en-IN' : 'hi-IN');
+          } else {
+            utterance.lang = personality === 'black' ? 'en-IN' : 'hi-IN';
           }
           utterance.rate = personality === 'black' ? 1.02 : 1.05;
           utterance.pitch = personality === 'black' ? 0.78 : 1.1; 
@@ -2232,8 +2235,12 @@ export default function App() {
 
         const sentence = sentences[sentenceIdx++];
         const utterance = new SpeechSynthesisUtterance(sentence);
-        utterance.lang = 'hi-IN';
-        if (chosenVoice) utterance.voice = chosenVoice;
+        if (chosenVoice) {
+          utterance.voice = chosenVoice;
+          utterance.lang = chosenVoice.lang || (personality === 'black' ? 'en-IN' : 'hi-IN');
+        } else {
+          utterance.lang = personality === 'black' ? 'en-IN' : 'hi-IN';
+        }
         utterance.pitch = voicePitch;
         utterance.rate = voiceRate;
 
@@ -2449,7 +2456,7 @@ export default function App() {
 
           voiceStateRef.current = 'speaking';
 
-          const voiceName = personality === 'black' ? 'Charon' : 'Zephyr';
+          const voiceName = personality === 'black' ? 'Charon' : 'Aoede';
           let ttsAudioPlayed = false;
 
           try {

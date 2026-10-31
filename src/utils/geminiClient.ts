@@ -389,14 +389,16 @@ export async function generateGeminiDirectTTS(
 
   // Dedicated Google Gemini Text-to-Speech models with audio modality
   const ttsModels = [
-    'gemini-2.5-flash-preview-tts'
+    'gemini-2.5-flash-preview-tts',
+    'gemini-3.8-flash-lite-tts',
+    'gemini-3.8-flash-tts'
   ];
 
   for (const model of ttsModels) {
     if (signal?.aborted) return null;
     try {
       const timeoutController = new AbortController();
-      const timer = setTimeout(() => timeoutController.abort(), 8000);
+      const timer = setTimeout(() => timeoutController.abort(), 25000);
 
       const onParentAbort = () => timeoutController.abort();
       if (signal) signal.addEventListener('abort', onParentAbort);

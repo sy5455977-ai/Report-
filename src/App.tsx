@@ -1375,7 +1375,7 @@ export default function App() {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
           controller.abort();
-        }, 3000);
+        }, 12000);
 
         try {
           const response = await fetch('/api/tts', {
@@ -1392,33 +1392,11 @@ export default function App() {
           if (response.ok) {
             const data = await response.json();
             if (data.audio) {
-              if (data.format === 'wav' || data.audio.startsWith('UklGR')) {
-                try {
-                  const audio = new Audio(`data:audio/wav;base64,${data.audio}`);
-                  audio.onended = () => {
-                    setPlayingMessageId(null);
-                    setIsAiSpeaking(false);
-                  };
-                  audio.onerror = () => {
-                    playAudioChunk(data.audio, () => {
-                      setPlayingMessageId(null);
-                      setIsAiSpeaking(false);
-                    });
-                  };
-                  await audio.play();
-                  success = true;
-                } catch (audioErr) {
-                  playAudioChunk(data.audio, () => {
-                    setPlayingMessageId(null);
-                    setIsAiSpeaking(false);
-                  });
-                  success = true;
-                }
-              } else {
-                playAudioChunk(data.audio, () => {
-                  setPlayingMessageId(null);
-                  setIsAiSpeaking(false);
-                });
+              const played = await playBase64WavInWebAudio(data.audio, () => {
+                setPlayingMessageId(null);
+                setIsAiSpeaking(false);
+              });
+              if (played) {
                 success = true;
               }
             }
@@ -1450,46 +1428,12 @@ export default function App() {
 
       if (!success) {
         if ('speechSynthesis' in window) {
-          // Speak clean content up to the questions section to avoid talking out loud the visual menu options
+          // Clean content up to the questions section to avoid reading visual options aloud
           const cleanText = text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
-          const utterance = new SpeechSynthesisUtterance(cleanText);
-          
-          const voices = window.speechSynthesis.getVoices();
-          let chosenVoice = null;
-          if (personality === 'black') {
-            chosenVoice = voices.find(v => 
-              (v.name.toLowerCase().includes('male') || v.name.toLowerCase().includes('david') || v.name.toLowerCase().includes('george') || v.name.toLowerCase().includes('guy') || v.name.toLowerCase().includes('rishi') || v.name.toLowerCase().includes('prabhat')) && !v.name.toLowerCase().includes('female')
-            ) || voices.find(v => v.lang.startsWith('hi')) || voices[0];
-          } else {
-            chosenVoice = voices.find(v => 
-              v.lang.startsWith('hi') || 
-              (v.name.toLowerCase().includes('google') && v.lang.startsWith('en') && v.name.toLowerCase().includes('female')) ||
-              v.name.toLowerCase().includes('female') || 
-              v.name.toLowerCase().includes('zira') || 
-              v.name.toLowerCase().includes('samantha')
-            ) || voices[0];
-          }
-          
-          if (chosenVoice) {
-            utterance.voice = chosenVoice;
-            utterance.lang = chosenVoice.lang || (personality === 'black' ? 'en-IN' : 'hi-IN');
-          } else {
-            utterance.lang = personality === 'black' ? 'en-IN' : 'hi-IN';
-          }
-          utterance.rate = personality === 'black' ? 1.02 : 1.05;
-          utterance.pitch = personality === 'black' ? 0.78 : 1.1; 
-          utterance.onstart = () => {
-            setIsAiSpeaking(true);
-          };
-          utterance.onend = () => {
+          speakWithBrowserVoice(cleanText, () => {
             setPlayingMessageId(null);
             setIsAiSpeaking(false);
-          };
-          utterance.onerror = () => {
-            setPlayingMessageId(null);
-            setIsAiSpeaking(false);
-          };
-          window.speechSynthesis.speak(utterance);
+          });
         } else {
           setPlayingMessageId(null);
           setIsAiSpeaking(false);
@@ -2541,15 +2485,9 @@ export default function App() {
       };
 
       recognition.onresult = (event: any) => {
-        // Barge-in: User speaks while AI is speaking
-        if (voiceStateRef.current === 'speaking' || voiceStateRef.current === 'processing') {
-          stopAllVoicePlayback();
-          if (directVoiceAbortControllerRef.current) {
-            directVoiceAbortControllerRef.current.abort();
-            directVoiceAbortControllerRef.current = null;
-          }
-          voiceStateRef.current = 'listening';
-          currentTurnSpeechRef.current = '';
+        // While AI is generating or speaking, strictly ignore microphone input to prevent speaker acoustic echo from cutting off the AI voice
+        if (voiceStateRef.current !== 'listening') {
+          return;
         }
 
         let fullAccumulated = '';

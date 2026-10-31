@@ -750,7 +750,7 @@ async function startServer() {
         return res.status(400).send("Text is required for TTS.");
       }
 
-      const defaultVoice = personality === 'black' ? 'Charon' : 'Zephyr';
+      const defaultVoice = personality === 'black' ? 'Charon' : 'Aoede';
       const chosenVoice = voice || defaultVoice;
 
       // Check cache first!

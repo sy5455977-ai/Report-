@@ -375,66 +375,9 @@ async function buildAndroidApkInBrowser(
   zip.file('assets/settings.json', JSON.stringify(settingsJson, null, 2));
 
 
-  // 7. Inject unique Package Name into AndroidManifest.xml
-  // Replaces 'net.mikespub.mywebview' with a unique 22-character ID (e.g. 'com.blackbell.aXXXXXXX')
-  // while keeping 'net.mikespub.mywebview.MainActivity' so classes.dex matches perfectly.
-  // This ensures Android treats every downloaded APK as a brand new standalone app and NEVER prompts to update!
-  const manifestFile = zip.file('AndroidManifest.xml');
-  if (manifestFile) {
-    try {
-      const manifestBytes = await manifestFile.async('uint8array');
-      const modifiedManifest = new Uint8Array(manifestBytes);
-
-      // Generate unique 22-character package name
-      // 'com.blackbell.a' (15) + 7 chars = 22 characters (exact match for net.mikespub.mywebview)
-      const randomSuffix = Math.random().toString(36).substring(2, 9).toLowerCase();
-      const targetPkg = `com.blackbell.a${randomSuffix}`;
-
-      // Encode UTF-16LE needles
-      const encodeUtf16Le = (str: string) => {
-        const buf = new Uint8Array(str.length * 2);
-        for (let i = 0; i < str.length; i++) {
-          const code = str.charCodeAt(i);
-          buf[i * 2] = code & 0xff;
-          buf[i * 2 + 1] = (code >> 8) & 0xff;
-        }
-        return buf;
-      };
-
-      const sourceU16 = encodeUtf16Le('net.mikespub.mywebview');
-      const targetU16 = encodeUtf16Le(targetPkg);
-      const mainActivityU16 = encodeUtf16Le('net.mikespub.mywebview.MainActivity');
-
-      for (let i = 0; i <= modifiedManifest.length - sourceU16.length; i++) {
-        let match = true;
-        for (let j = 0; j < sourceU16.length; j++) {
-          if (modifiedManifest[i + j] !== sourceU16[j]) { match = false; break; }
-        }
-
-        if (match) {
-          // Check if this occurrence is part of MainActivity class name in classes.dex
-          let isMainActivity = false;
-          if (i + mainActivityU16.length <= modifiedManifest.length) {
-            isMainActivity = true;
-            for (let k = 0; k < mainActivityU16.length; k++) {
-              if (modifiedManifest[i + k] !== mainActivityU16[k]) { isMainActivity = false; break; }
-            }
-          }
-
-          if (!isMainActivity) {
-            modifiedManifest.set(targetU16, i);
-            i += targetU16.length - 1;
-          } else {
-            i += mainActivityU16.length - 1;
-          }
-        }
-      }
-
-      zip.file('AndroidManifest.xml', modifiedManifest);
-    } catch (mErr) {
-      console.warn('[APK Builder] AndroidManifest.xml package injection warning:', mErr);
-    }
-  }
+  // 7. Keep AndroidManifest.xml intact from the compiled base template
+  // Guarantees AndroidX InitializationProvider, FileProvider, MainActivity, and R resources match classes.dex exactly with zero startup crashes.
+  // The custom app title and user logo are rendered via resources.arsc and res/pu.png.
 
   // 8. Patch resources.arsc: Replace "My WebView" with user app name and link adaptive icon to custom PNG
   const arscFile = zip.file('resources.arsc');

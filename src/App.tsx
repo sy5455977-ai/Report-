@@ -1432,8 +1432,8 @@ export default function App() {
         const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || (typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : '') || '';
         if (activeKey) {
           try {
-            // Strictly masculine Charon for Black, feminine Kore for Bell
-            const voiceName = personality === 'black' ? 'Charon' : 'Kore';
+            // Strictly masculine Charon for Black, feminine Aoede for Bell
+            const voiceName = personality === 'black' ? 'Charon' : 'Aoede';
             const ttsResult = await generateGeminiDirectTTS(text, voiceName, activeKey);
             if (ttsResult?.base64Audio) {
               const played = await playBase64WavInWebAudio(ttsResult.base64Audio, () => {
@@ -2502,7 +2502,7 @@ export default function App() {
 
           voiceStateRef.current = 'speaking';
 
-          const voiceName = personality === 'black' ? 'Charon' : 'Kore';
+          const voiceName = personality === 'black' ? 'Charon' : 'Aoede';
           let ttsAudioPlayed = false;
 
           try {
@@ -2541,10 +2541,15 @@ export default function App() {
       };
 
       recognition.onresult = (event: any) => {
-        // Anti-cutoff guard: Ignore recognition results while AI is speaking or processing
-        // This stops phone loudspeaker echo from killing AI voice mid-sentence
+        // Barge-in: User speaks while AI is speaking
         if (voiceStateRef.current === 'speaking' || voiceStateRef.current === 'processing') {
-          return;
+          stopAllVoicePlayback();
+          if (directVoiceAbortControllerRef.current) {
+            directVoiceAbortControllerRef.current.abort();
+            directVoiceAbortControllerRef.current = null;
+          }
+          voiceStateRef.current = 'listening';
+          currentTurnSpeechRef.current = '';
         }
 
         let fullAccumulated = '';
@@ -2562,8 +2567,7 @@ export default function App() {
           currentTurnSpeechRef.current = text;
           setVoiceTranscription(text);
 
-          // Generous pause threshold so user sentence is not interrupted while pausing naturally
-          const pauseThreshold = hasFinalResult ? 600 : 950;
+          const pauseThreshold = hasFinalResult ? 400 : 650;
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           silenceTimerRef.current = setTimeout(() => {
             executeTurnResponse();

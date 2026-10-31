@@ -359,22 +359,9 @@ async function buildAndroidApkInBrowser(
       { url: 'https://appassets.androidplatform.net/sites/demo/test.html', title: appName },
       { url: 'https://appassets.androidplatform.net/sites/web/index.html', title: appName }
     ],
-    other: 'https://appassets.androidplatform.net/sites/local/index.html',
-    match: [
-      ['host', 'equals', 'appassets.androidplatform.net'],
-      ['host', 'equals', 'github.com'],
-      ['host', 'endsWith', 'html5test.co']
-    ],
-    skip: [
-      ['path', 'endsWith', '.epub']
-    ],
     local_sites: true,
     remote_debug: false,
     console_log: true,
-    js_interface: true,
-    context_menu: false,
-    not_matching: false,
-    update_zip: '',
     web_settings: {
       JavaScriptEnabled: true,
       DomStorageEnabled: true,
@@ -449,8 +436,7 @@ async function buildAndroidApkInBrowser(
     }
   }
 
-  // 8. Patch resources.arsc: Replace "My WebView" with user app name safely
-  // (Do not alter XML vector drawable pointers in resources.arsc to avoid Android InflateException)
+  // 8. Patch resources.arsc: Replace "My WebView" with user app name and link adaptive icon to custom PNG
   const arscFile = zip.file('resources.arsc');
   if (arscFile) {
     try {
@@ -474,6 +460,20 @@ async function buildAndroidApkInBrowser(
         }
         if (match) {
           arscBytes.set(targetName, i);
+        }
+      }
+
+      // Replace adaptive-icon foreground vector reference (res/Qr.xml -> res/pu.png, exactly 10 ASCII chars)
+      // This tells Android PackageParser and Google Play Protect to render the high-res PNG icon
+      const qrRef = new TextEncoder().encode('res/Qr.xml');
+      const puRef = new TextEncoder().encode('res/pu.png');
+      for (let i = 0; i <= arscBytes.length - qrRef.length; i++) {
+        let match = true;
+        for (let j = 0; j < qrRef.length; j++) {
+          if (arscBytes[i + j] !== qrRef[j]) { match = false; break; }
+        }
+        if (match) {
+          arscBytes.set(puRef, i);
         }
       }
 

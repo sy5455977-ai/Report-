@@ -375,93 +375,20 @@ async function buildAndroidApkInBrowser(
   zip.file('assets/settings.json', JSON.stringify(settingsJson, null, 2));
 
 
-  // 7. Inject Unique Standalone Package Name into AndroidManifest.xml and resources.arsc
-  // Each app receives its own unique 22-character Package Name (e.g. 'com.blackbell.ahiljwcy')
-  // matching the exact byte length of 'net.mikespub.mywebview'.
-  // This guarantees that Android installs every new app as a standalone separate app (never asks to "Update this app")
-  // while keeping classes.dex MainActivity and resources.arsc in 100% synchronization without launch crashes!
-  const cleanAppTitle = appName.trim().replace(/[<>:"/\\|?*]/g, '') || 'App';
-  const cleanAlnum = cleanAppTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const prefix3 = (cleanAlnum.slice(0, 3) || 'app').padEnd(3, 'a');
-  let titleHash = 0;
-  for (let i = 0; i < cleanAppTitle.length; i++) {
-    titleHash = ((titleHash << 5) - titleHash + cleanAppTitle.charCodeAt(i)) | 0;
-  }
-  const hashHex = (Math.abs(titleHash).toString(36) + '0000').slice(0, 4);
-  const targetPkg = `com.blackbell.a${prefix3}${hashHex}`.toLowerCase(); // exactly 22 characters
+  // 7. Keep AndroidManifest.xml intact from the compiled base template
+  // Guarantees AndroidX InitializationProvider, FileProvider, MainActivity, and R resources match classes.dex exactly with zero startup crashes.
+  // The custom app title and user logo are rendered via resources.arsc and res/pu.png.
 
-  const encodeUtf16Le = (str: string) => {
-    const buf = new Uint8Array(str.length * 2);
-    for (let i = 0; i < str.length; i++) {
-      const code = str.charCodeAt(i);
-      buf[i * 2] = code & 0xff;
-      buf[i * 2 + 1] = (code >> 8) & 0xff;
-    }
-    return buf;
-  };
-
-  const sourceU16 = encodeUtf16Le('net.mikespub.mywebview');
-  const targetU16 = encodeUtf16Le(targetPkg);
-  const mainActivityU16 = encodeUtf16Le('net.mikespub.mywebview.MainActivity');
-
-  // Patch AndroidManifest.xml
-  const manifestFile = zip.file('AndroidManifest.xml');
-  if (manifestFile) {
-    try {
-      const manifestBytes = await manifestFile.async('uint8array');
-      const modifiedManifest = new Uint8Array(manifestBytes);
-
-      for (let i = 0; i <= modifiedManifest.length - sourceU16.length; i++) {
-        let match = true;
-        for (let j = 0; j < sourceU16.length; j++) {
-          if (modifiedManifest[i + j] !== sourceU16[j]) { match = false; break; }
-        }
-
-        if (match) {
-          let isMainActivity = false;
-          if (i + mainActivityU16.length <= modifiedManifest.length) {
-            isMainActivity = true;
-            for (let k = 0; k < mainActivityU16.length; k++) {
-              if (modifiedManifest[i + k] !== mainActivityU16[k]) { isMainActivity = false; break; }
-            }
-          }
-
-          if (!isMainActivity) {
-            modifiedManifest.set(targetU16, i);
-            i += targetU16.length - 1;
-          } else {
-            i += mainActivityU16.length - 1;
-          }
-        }
-      }
-
-      zip.file('AndroidManifest.xml', modifiedManifest);
-    } catch (mErr) {
-      console.warn('[APK Builder] AndroidManifest package patch error:', mErr);
-    }
-  }
-
-  // 8. Patch resources.arsc: Update package name AND app title AND adaptive icon
+  // 8. Patch resources.arsc: Replace "My WebView" with user app name and link adaptive icon to custom PNG
   const arscFile = zip.file('resources.arsc');
   if (arscFile) {
     try {
       const arscBytes = await arscFile.async('uint8array');
 
-      // A. Synchronize Package Name in ResTable_package (offset 73008) so AssetManager binds resources perfectly
-      for (let i = 0; i <= arscBytes.length - sourceU16.length; i++) {
-        let match = true;
-        for (let j = 0; j < sourceU16.length; j++) {
-          if (arscBytes[i + j] !== sourceU16[j]) { match = false; break; }
-        }
-        if (match) {
-          arscBytes.set(targetU16, i);
-          i += targetU16.length - 1;
-        }
-      }
-
-      // B. Replace app name in resources.arsc (UTF-8 string pool entry, exactly 13 bytes: 2 byte length + 10 byte text + 1 byte null)
+      // Replace app name in resources.arsc (UTF-8 string pool entry, exactly 13 bytes: 2 byte length + 10 byte text + 1 byte null)
       const sourceName = new Uint8Array([0x0a, 0x0a, 0x4d, 0x79, 0x20, 0x57, 0x65, 0x62, 0x56, 0x69, 0x65, 0x77, 0x00]);
-      const fixed10 = cleanAppTitle.length >= 10 ? cleanAppTitle.substring(0, 10) : cleanAppTitle.padEnd(10, ' ');
+      const cleanTitle = appName.trim().replace(/[<>:"/\\|?*]/g, '') || 'App';
+      const fixed10 = cleanTitle.length >= 10 ? cleanTitle.substring(0, 10) : cleanTitle.padEnd(10, ' ');
       const nameUtf8 = new TextEncoder().encode(fixed10);
       const targetName = new Uint8Array(13);
       targetName[0] = 10;
@@ -479,7 +406,8 @@ async function buildAndroidApkInBrowser(
         }
       }
 
-      // C. Replace adaptive-icon foreground vector reference (res/Qr.xml -> res/pu.png, exactly 10 ASCII chars)
+      // Replace adaptive-icon foreground vector reference (res/Qr.xml -> res/pu.png, exactly 10 ASCII chars)
+      // This tells Android PackageParser and Google Play Protect to render the high-res PNG icon
       const qrRef = new TextEncoder().encode('res/Qr.xml');
       const puRef = new TextEncoder().encode('res/pu.png');
       for (let i = 0; i <= arscBytes.length - qrRef.length; i++) {

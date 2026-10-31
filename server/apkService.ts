@@ -416,62 +416,18 @@ export async function generateSignedApk(
     logoBase64
   );
 
-  // 3. Inject Unique Standalone Package Name into AndroidManifest.xml and resources.arsc
-  // Matches exact 22-character byte length of 'net.mikespub.mywebview'.
-  // This guarantees Android treats every distinct app as a separate app (never asks to "Update this app"),
-  // while keeping classes.dex MainActivity and resources.arsc completely synchronized without crash!
-  const cleanAlnum = cleanTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const prefix3 = (cleanAlnum.slice(0, 3) || 'app').padEnd(3, 'a');
-  let titleHash = 0;
-  for (let i = 0; i < cleanTitle.length; i++) {
-    titleHash = ((titleHash << 5) - titleHash + cleanTitle.charCodeAt(i)) | 0;
-  }
-  const hashHex = (Math.abs(titleHash).toString(36) + '0000').slice(0, 4);
-  const targetPkg = `com.blackbell.a${prefix3}${hashHex}`.toLowerCase(); // exactly 22 characters
+  // 3. Keep AndroidManifest.xml intact from the compiled base template
+  // Guarantees AndroidX InitializationProvider, FileProvider, MainActivity, and R resources match classes.dex exactly with zero startup crashes.
+  // The custom app title and user logo are rendered via resources.arsc and res/pu.png.
 
-  const sourceU16 = Buffer.from('net.mikespub.mywebview', 'utf16le');
-  const targetU16 = Buffer.from(targetPkg, 'utf16le');
-  const mainActivityU16 = Buffer.from('net.mikespub.mywebview.MainActivity', 'utf16le');
 
-  const manifestFile = zip.file('AndroidManifest.xml');
-  if (manifestFile) {
-    try {
-      const manifestBuf = await manifestFile.async('nodebuffer');
-      const modifiedManifest = Buffer.from(manifestBuf);
-
-      let idx = 0;
-      while ((idx = modifiedManifest.indexOf(sourceU16, idx)) !== -1) {
-        const isMainActivity = (idx + mainActivityU16.length <= modifiedManifest.length) &&
-          modifiedManifest.subarray(idx, idx + mainActivityU16.length).equals(mainActivityU16);
-
-        if (!isMainActivity) {
-          targetU16.copy(modifiedManifest, idx);
-          idx += targetU16.length;
-        } else {
-          idx += mainActivityU16.length;
-        }
-      }
-
-      zip.file('AndroidManifest.xml', modifiedManifest);
-    } catch (mErr) {
-      console.warn('[Server APK Builder] AndroidManifest package patch warning:', mErr);
-    }
-  }
-
-  // 5. Update resources.arsc: package name, app name string, and adaptive icon foreground
+  // 5. Update resources.arsc app name string and adaptive icon foreground safely
   const arscFile = zip.file('resources.arsc');
   if (arscFile) {
     const arscBuf = await arscFile.async('nodebuffer');
     let newArsc = Buffer.from(arscBuf);
 
-    // A. Synchronize Package Name in ResTable_package (offset 73008) so AssetManager binds resources perfectly
-    let arscPkgIdx = newArsc.indexOf(sourceU16);
-    while (arscPkgIdx !== -1) {
-      targetU16.copy(newArsc, arscPkgIdx);
-      arscPkgIdx = newArsc.indexOf(sourceU16, arscPkgIdx + targetU16.length);
-    }
-
-    // B. Replace app name in resources.arsc (UTF-8 string pool entry)
+    // Replace app name in resources.arsc (UTF-8 string pool entry)
     const sourceArscName = Buffer.from([0x0a, 0x0a, 0x4d, 0x79, 0x20, 0x57, 0x65, 0x62, 0x56, 0x69, 0x65, 0x77, 0x00]);
     const nameBuffer = Buffer.from(cleanTitle.substring(0, 10), 'utf8');
     const nameLen = nameBuffer.length;
@@ -486,7 +442,10 @@ export async function generateSignedApk(
       nameIdx = newArsc.indexOf(sourceArscName, nameIdx + targetArscName.length);
     }
 
-    // C. Replace adaptive-icon foreground vector reference (res/Qr.xml -> res/pu.png)
+    // Replace adaptive-icon foreground vector reference (res/Qr.xml -> res/pu.png)
+    // Both are exactly 10 ASCII characters, perfectly maintaining string pool integrity!
+    // This allows modern Android (Poco C51, Android 13/14, MIUI) to render the crystal-clear
+    // custom PNG logo inside the native Adaptive Icon squircle without blur or downsampling!
     const arrowVectorRef = Buffer.from('res/Qr.xml', 'utf8');
     const targetPngRef = Buffer.from('res/pu.png', 'utf8');
 

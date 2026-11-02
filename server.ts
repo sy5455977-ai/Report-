@@ -756,6 +756,38 @@ async function startServer() {
     }
   });
 
+  app.post('/api/gemini/validate', async (req, res) => {
+    try {
+      const { apiKey } = req.body;
+      const keyToTest = (apiKey || process.env.GEMINI_API_KEY || '').trim();
+      if (!keyToTest) {
+        return res.status(400).json({ valid: false, error: "API Key is required." });
+      }
+
+      const tempAi = new GoogleGenAI({
+        apiKey: keyToTest,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build'
+          }
+        }
+      });
+
+      const response = await tempAi.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: "ping"
+      });
+
+      if (response && response.text) {
+        return res.json({ valid: true });
+      }
+      return res.json({ valid: true });
+    } catch (err: any) {
+      console.warn("[Gemini Key Validate] Server-side validation failed:", err?.message);
+      return res.status(400).json({ valid: false, error: err?.message || "Invalid API key or network error." });
+    }
+  });
+
   app.post('/api/tts', async (req, res) => {
     try {
       const { text, voice, personality } = req.body;

@@ -2095,6 +2095,86 @@ export default function App() {
       const latency = res.headers.get('x-model-latency') || '';
       const isResponseImage = res.headers.get('x-is-image') === 'true';
       const aiText = await res.text();
+
+      const contentType = res.headers.get('content-type') || '';
+      const isHtmlResponse = contentType.includes('text/html') || aiText.trim().startsWith('<!DOCTYPE') || aiText.trim().startsWith('<html');
+
+      if (isHtmlResponse) {
+        console.info("[Netlify/Vercel/Hostinger Static Deploy Detected] Executing client-direct AI engine...");
+        if (activeKey) {
+          const directResult = await callDirectGeminiChat({
+            messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+            personality,
+            apiKey: activeKey,
+            userName: currentUser?.username || 'User',
+            isAdmin: currentUser?.email === 'sy5455977@gmail.com'
+          });
+
+          const formattedContent = directResult.questions && directResult.questions.length > 0
+            ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
+            : directResult.text;
+
+          const isBuildOrRebuild = currentText.toLowerCase().startsWith('/build') || currentText.toLowerCase().startsWith('/rebuild');
+          const finalMsg: Message = {
+            id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            role: 'ai',
+            content: formattedContent,
+            winner: isBuildOrRebuild ? 'Blackbell 2.0 (Website Builder)' : 'Gemini 2.5 Flash (Static Deploy Mode)',
+            latency: '0.4s'
+          };
+
+          updateActiveSessionMessages([...newMessages, finalMsg]);
+          if (autoSpeak) {
+            playMessageTTS(directResult.text, newMessages.length);
+          }
+          return;
+        } else {
+          try {
+            const pollRes = await fetch('https://text.pollinations.ai/', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                messages: [
+                  {
+                    role: 'system',
+                    content: personality === 'black'
+                      ? `You are BLACKBELL AI (Persona: Black). User jo poochhe, usi ka seedha, accurate aur professional answer do. Unnecessary flattery, greetings aur emotional chatting band karo. Answer first, explanation second. Structure with headings, bold terms, lists. Always end with [QUESTIONS] and 3 follow-ups.`
+                      : `You are BLACKBELL AI (Persona: Bell). User jo poochhe, usi ka seedha, accurate aur professional answer do. Unnecessary flattery, greetings aur emotional chatting band karo. Answer first, explanation second. Structure with headings, bold terms, lists. Always end with [QUESTIONS] and 3 follow-ups.`
+                  },
+                  ...newMessages.slice(-6).map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content }))
+                ]
+              })
+            });
+
+            if (pollRes.ok) {
+              const pollText = await pollRes.text();
+              if (pollText && !pollText.trim().startsWith('<!DOCTYPE') && !pollText.trim().startsWith('<html')) {
+                const finalMsg: Message = {
+                  id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+                  role: 'ai',
+                  content: pollText,
+                  winner: 'Blackbell (Static Keyless Engine)',
+                  latency: '0.5s'
+                };
+                updateActiveSessionMessages([...newMessages, finalMsg]);
+                return;
+              }
+            }
+          } catch (pollErr) {
+            console.warn("Keyless fallback execution error:", pollErr);
+          }
+
+          const noKeyMsg: Message = {
+            id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            role: 'ai',
+            content: "Netlify / Vercel / Hostinger static deployment par chat, voice aur `/build` features active karne ke liye please top header mein 'API Key' par click karke apni free Google Gemini API Key add karein! Key browser mein secure save hoti hai. 🔑\n\n[QUESTIONS]\n- Gemini API Key kaise create karein?\n- Kya ye key bilkul free hoti hai?\n- Key add karne ke baad /build kaise use karein?",
+            winner: 'Blackbell System',
+            latency: '0.00'
+          };
+          updateActiveSessionMessages([...newMessages, noKeyMsg]);
+          return;
+        }
+      }
       const finalMsg: Message = { 
         id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         role: 'ai', 

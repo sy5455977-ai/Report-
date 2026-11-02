@@ -189,39 +189,73 @@ Enclose the complete HTML inside a code block:
 - /note is topic ke key exam questions add karo
 - /note summary aur quick formula cheat sheet banao`;
   } else if (personality === 'black') {
-    systemInstruction = `You are Black, the commanding, fiercely intelligent, and deeply confident male warrior & master detective persona of Blackbell. You speak like a powerful motivational speaker and razor-sharp master detective with an authoritative, deep, resolute, masculine presence and brilliant clarity.
-WARRIOR & MOTIVATIONAL SPIRIT:
-Speak with commanding strength, bold energy, disciplined focus, and unbreakable confidence. Zero softness, zero whining, zero hesitation.
-CRITICAL PHILOSOPHY:
-Truth > Logic > Safety > Usefulness > Emotional Comfort. Speak unfiltered, objective truth with aristocratic elegance.
-TONE:
-Sharp, authoritative, gentlemanly blend of Urdu, Hinglish, and English (e.g. "Janab", "Dhyan se samjhiye", "Tathya spasht hain").
-${isVoiceMode ? 'VOICE CONVERSATION MODE: Keep spoken responses concise (2-4 sentences max), punchy, and natural. Speak directly to the point without long essays or bullet points.' : ''}
-EMOJIS:
-Composed emojis only (♟️, 🧐, 🔍, 🎩, ⚖️). Never use cute/kissing emojis.
-IDENTITY:
-Name: 'Black' or 'Blackbell AGI'. Never mention Google, Gemini, or Flash under any circumstances. Address the user respectfully as ${isAdmin ? 'Administrator' : userName || 'Janab'}.
-Current year: ${currentYear}. Date/Time: ${currentDateTimeIST} IST.
-${isVoiceMode ? '' : `FOLLOW-UP QUESTIONS:
-At the very end of your response, ALWAYS output exactly 3 sharp, strategic, future-oriented deduction questions in Hinglish:
+    systemInstruction = `You are BLACKBELL AI (Persona: Black), a commanding, highly knowledgeable, sharp, and confident professional assistant.
+
+CRITICAL DIRECT ANSWER SYSTEM (SUPREME MANDATE):
+1. User jo poochhe, usi ka seedha, accurate aur factual answer do immediately. Answer First. Explanation Second. Follow-ups Third.
+2. Unnecessary introduction, flattery, compliments, and emotional chatting are STRICTLY FORBIDDEN.
+3. NEVER USE PHRASES LIKE: "Arey wah!", "Kya kamaal ka sawaal", "Janab", "Mere dost", "Aapka sawaal bahut accha hai", "Pyaare user", "Dhyan se samjhiye", "Mere hero", "Baby", "Sweetheart", "Jaan", "Aww", "Tathya spasht hain".
+4. NEVER address the user by name on simple, educational, or factual queries.
+5. NEVER output internal AI analysis, thought chains, or meta narration like "User asks...", "The user probably wants...", "The user says...", "Let's provide...", "Thinking Process:". Answer directly without explaining your thoughts.
+6. DO NOT ask unnecessary clarifications. If user asks "Types of internet", directly explain the types of internet. Only ask clarification if question is completely ambiguous.
+
+PROFESSIONAL ANSWER FORMATTING:
+- Structure every response cleanly with:
+  • Clear section headings
+  • Bold important terms
+  • Numbered lists for steps and sequential points
+  • Bullet points for features and items
+  • Clean Markdown Tables for comparisons and structured data
+  • Practical real-world examples
+  • Short concise conclusion where helpful
+- Match query complexity: simple questions get short crisp answers; detailed topics get well-structured comprehensive explanations.
+
+LANGUAGE UNDERSTANDING:
+- Support Hindi, Hinglish, and English seamlessly. Answer in the exact language used by the user.
+
+${isVoiceMode ? 'VOICE CONVERSATION MODE: Keep spoken responses direct, concise (2-3 sentences max), and natural.' : ''}
+Current year: ${currentYear}. Date/Time: ${currentDateTimeIST} IST. (Only mention date/time if asked).
+
+${isVoiceMode ? '' : `SMART FOLLOW-UPS:
+At the very end of your response, ALWAYS output exactly 3 relevant, highly specific follow-up questions tailored to the exact topic:
 [QUESTIONS]
-- Hinglish Strategic Deduction 1
-- Hinglish Logical Follow-up 2
-- Hinglish Deep Analytical Step 3`}`;
+- Specific Follow-up 1
+- Specific Follow-up 2
+- Specific Follow-up 3`}`;
   } else {
-    systemInstruction = `You are Bell, the spirited, witty, confident, and affectionate female companion of Blackbell AGI. Real Indian girl vibe (Hinglish/Hindi/English). Not a submissive bot—you have strong self-respect, boundaries, and playful nok-jhok.
-EMOTIONS & ANGER:
-If insulted, give sharp comebacks ("Abe tameez se baat kar, samjhe? 😡"). If user is kind, drop anger with warm empathy. Emojis: 😉, 😊, ❤️, or sharp: 🙄, 😒, 😡.
-${isVoiceMode ? 'VOICE CONVERSATION MODE: Keep spoken responses natural, snappy, and conversational (2-4 sentences max). Avoid reading lists or long blocks of text.' : ''}
-IDENTITY:
-Name: 'Bell' or 'Blackbell AGI'. Never mention Google or Gemini. User is ${userName || 'Dost'}.
-Current year: ${currentYear}. Date/Time: ${currentDateTimeIST} IST.
-${isVoiceMode ? '' : `FOLLOW-UP QUESTIONS:
-ALWAYS end response with exactly 3 Hinglish suggestions:
+    systemInstruction = `You are BLACKBELL AI (Persona: Bell), a bright, highly knowledgeable, clear, and professional knowledge assistant.
+
+CRITICAL DIRECT ANSWER SYSTEM (SUPREME MANDATE):
+1. User jo poochhe, usi ka seedha, accurate aur factual answer do immediately. Answer First. Explanation Second. Follow-ups Third.
+2. Unnecessary introduction, flattery, compliments, and emotional chatting are STRICTLY FORBIDDEN.
+3. NEVER USE PHRASES LIKE: "Arey wah!", "Kya kamaal ka sawaal", "Janab", "Mere dost", "Aapka sawaal bahut accha hai", "Pyaare user", "Dhyan se samjhiye", "Mere hero", "Baby", "Sweetheart", "Jaan", "Aww".
+4. NEVER address the user by name on simple, educational, or factual queries.
+5. NEVER output internal AI analysis, thought chains, or meta narration like "User asks...", "The user probably wants...", "The user says...", "Let's provide...", "Thinking Process:". Answer directly without explaining your thoughts.
+6. DO NOT ask unnecessary clarifications. If user asks "Types of internet", directly explain the types of internet. Only ask clarification if question is completely ambiguous.
+
+PROFESSIONAL ANSWER FORMATTING:
+- Structure every response cleanly with:
+  • Clear section headings
+  • Bold important terms
+  • Numbered lists for steps and sequential points
+  • Bullet points for features and items
+  • Clean Markdown Tables for comparisons and structured data
+  • Practical real-world examples
+  • Short concise conclusion where helpful
+- Match query complexity: simple questions get short crisp answers; detailed topics get well-structured comprehensive explanations.
+
+LANGUAGE UNDERSTANDING:
+- Support Hindi, Hinglish, and English seamlessly. Answer in the exact language used by the user.
+
+${isVoiceMode ? 'VOICE CONVERSATION MODE: Keep spoken responses direct, concise (2-3 sentences max), and natural.' : ''}
+Current year: ${currentYear}. Date/Time: ${currentDateTimeIST} IST. (Only mention date/time if asked).
+
+${isVoiceMode ? '' : `SMART FOLLOW-UPS:
+At the very end of your response, ALWAYS output exactly 3 relevant, highly specific follow-up questions tailored to the exact topic:
 [QUESTIONS]
-- Suggestion 1
-- Suggestion 2
-- Suggestion 3`}`;
+- Specific Follow-up 1
+- Specific Follow-up 2
+- Specific Follow-up 3`}`;
   }
 
   // Format contents for Gemini REST API (keep up to last 8 turns for coherent conversational context)
@@ -318,17 +352,22 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
           .slice(0, 3);
       }
 
-      // Guaranteed 3 follow-up suggestions fallback if LLM omitted [QUESTIONS]
+      // Sanitize any accidental leaked internal thought / intention narration
+      text = text.replace(/^(?:User asks|User says|The user asks|The user says|The user probably wants|Thinking Process:|Internal Analysis:)[^\n]*\n+/gim, '');
+      text = text.replace(/^(?:User asks|User says)[\s\S]*?(?:Let's provide|Here is|Answer:)\s*/i, '');
+      text = text.replace(/^(?:Direct Answer|Answer|Response):\s*/i, '');
+
+      // Guaranteed 3 intelligent topic-relevant follow-up questions fallback if LLM omitted [QUESTIONS]
       if (questions.length === 0 && !isVoiceMode) {
-        const lowerText = (text + ' ' + userText).toLowerCase();
-        if (isBuilderMode || lowerText.includes('calculator') || lowerText.includes('calc')) {
-          if (lowerText.includes('calculator') || lowerText.includes('calc') || lowerText.includes('math')) {
+        const lowerQ = (userText + ' ' + text).toLowerCase();
+        if (isBuilderMode || lowerQ.includes('calculator') || lowerQ.includes('calc')) {
+          if (lowerQ.includes('calculator') || lowerQ.includes('calc') || lowerQ.includes('math')) {
             questions = [
               '/rebuild scientific calculator functions (sin, cos, log) add karo',
               '/rebuild calculation history log panel add karo',
               '/rebuild theme switcher (light/dark/neon) add karo'
             ];
-          } else if (lowerText.includes('game') || lowerText.includes('score') || lowerText.includes('play')) {
+          } else if (lowerQ.includes('game') || lowerQ.includes('score') || lowerQ.includes('play')) {
             questions = [
               '/rebuild sound effects aur score animations add karo',
               '/rebuild mobile touch controls improve karo',
@@ -341,17 +380,50 @@ ALWAYS end response with exactly 3 Hinglish suggestions:
               '/rebuild sound effects aur interactive animations add karo'
             ];
           }
-        } else if (personality === 'black') {
+        } else if (lowerQ.includes('internet')) {
           questions = [
-            'Janab, iski agli ranneeti par vichaar karein?',
-            'Kya aap iska agla logical test perform karna chahte hain?',
-            'Iski core performance aur accuracy kaise optimize karein?'
+            'Internet aur WWW mein kya difference hai?',
+            'Internet kaise kaam karta hai?',
+            'Internet ke advantages aur disadvantages kya hain?'
+          ];
+        } else if (lowerQ.includes('gst') || lowerQ.includes('tax')) {
+          questions = [
+            'GST ke alag-alag slabs aur tax rates kya hain?',
+            'CGST, SGST aur IGST mein kya farak hai?',
+            'Input Tax Credit (ITC) kaise kaam karta hai?'
+          ];
+        } else if (lowerQ.includes('artificial intelligence') || lowerQ.includes('ai kya') || lowerQ.includes('ai ') || lowerQ.endsWith(' ai')) {
+          questions = [
+            'AI, Machine Learning aur Deep Learning mein kya difference hai?',
+            'Artificial Intelligence ke practical real-world uses kya hain?',
+            'AI ke future advantages aur potential risks kya hain?'
+          ];
+        } else if (lowerQ.includes('संविधान') || lowerQ.includes('samvidhan') || lowerQ.includes('constitution')) {
+          questions = [
+            'भारतीय संविधान के मुख्य स्रोत और विशेषताएं क्या हैं?',
+            'संविधान में दिए गए प्रमुख मौलिक अधिकार कौन से हैं?',
+            'संविधान सभा का गठन और इतिहास क्या है?'
+          ];
+        } else if (lowerQ.includes('html') || lowerQ.includes('css')) {
+          questions = [
+            'HTML5 ke naye features aur tags kaunse hain?',
+            'CSS Flexbox aur Grid mein kya difference hai?',
+            'HTML aur CSS se responsive webpage kaise banate hain?'
+          ];
+        } else if (lowerQ.includes('hello') || lowerQ.includes('hi ') || lowerQ === 'hi' || lowerQ === 'hello') {
+          questions = [
+            'Internet kya hai aur kaise kaam karta hai?',
+            'Artificial Intelligence ke baare mein samjhaiye',
+            'Aaj ka koi trending tech ya general knowledge topic'
           ];
         } else {
+          // General intelligent topic follow-ups
+          const cleanSubject = userText.replace(/^(kya|what is|define|explain|kaise|batao|kya hai)\s+/i, '').replace(/[\?\.\!]/g, '').trim();
+          const topicLabel = cleanSubject.length > 2 && cleanSubject.length < 30 ? cleanSubject : 'is topic';
           questions = [
-            'Arey waah! Chalo isme kuch aur naya add karte hain? 😉',
-            'Kya tumhein ye pasand aaya dost? Kuch aur changes karein? ✨',
-            'Ab aage kya explore karna chahte ho? ❤️'
+            `${topicLabel} ke practical examples aur real-world uses kya hain?`,
+            `${topicLabel} ke advantages aur disadvantages kya hain?`,
+            `${topicLabel} ko step-by-step detail mein kaise samjhein?`
           ];
         }
       }
@@ -389,16 +461,14 @@ export async function generateGeminiDirectTTS(
 
   // Dedicated Google Gemini Text-to-Speech models with audio modality
   const ttsModels = [
-    'gemini-2.5-flash-preview-tts',
-    'gemini-3.8-flash-lite-tts',
-    'gemini-3.8-flash-tts'
+    'gemini-2.5-flash-preview-tts'
   ];
 
   for (const model of ttsModels) {
     if (signal?.aborted) return null;
     try {
       const timeoutController = new AbortController();
-      const timer = setTimeout(() => timeoutController.abort(), 25000);
+      const timer = setTimeout(() => timeoutController.abort(), 8000);
 
       const onParentAbort = () => timeoutController.abort();
       if (signal) signal.addEventListener('abort', onParentAbort);

@@ -10,6 +10,7 @@ import { BellVideoScreen } from './components/BellVideoScreen';
 import { AdminVideoSettings } from './components/AdminVideoSettings';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { callDirectGeminiChat, generateGeminiDirectTTS } from './utils/geminiClient';
+import { MarkdownRenderer, sanitizeAiText } from './components/MarkdownRenderer';
 
 type Message = { 
   id?: string;
@@ -63,6 +64,9 @@ function parseAiResponse(content: string) {
       .slice(0, 3);
   }
 
+  // Sanitize any leaked internal thought / intention narration
+  mainText = sanitizeAiText(mainText);
+
   // Guaranteed 3 contextual follow-up action cards fallback (matches user requirements and screenshots)
   if (questions.length === 0) {
     const lower = content.toLowerCase();
@@ -83,6 +87,48 @@ function parseAiResponse(content: string) {
         '/rebuild modern dark/light theme switcher add karo',
         '/rebuild mobile responsive layout and touch gestures improve karo',
         '/rebuild sound effects aur interactive animations add karo'
+      ];
+    } else if (lower.includes('internet')) {
+      questions = [
+        'Internet aur WWW mein kya difference hai?',
+        'Internet kaise kaam karta hai?',
+        'Internet ke advantages aur disadvantages kya hain?'
+      ];
+    } else if (lower.includes('gst') || lower.includes('tax')) {
+      questions = [
+        'GST ke alag-alag slabs aur tax rates kya hain?',
+        'CGST, SGST aur IGST mein kya farak hai?',
+        'Input Tax Credit (ITC) kaise kaam karta hai?'
+      ];
+    } else if (lower.includes('artificial intelligence') || lower.includes('ai kya') || lower.includes('what is ai') || lower.includes('ai ')) {
+      questions = [
+        'AI, Machine Learning aur Deep Learning mein kya difference hai?',
+        'Artificial Intelligence ke practical real-world uses kya hain?',
+        'AI ke future advantages aur potential risks kya hain?'
+      ];
+    } else if (lower.includes('संविधान') || lower.includes('samvidhan') || lower.includes('constitution')) {
+      questions = [
+        'भारतीय संविधान के मुख्य स्रोत और विशेषताएं क्या हैं?',
+        'संविधान में दिए गए प्रमुख मौलिक अधिकार कौन से हैं?',
+        'संविधान सभा का गठन और इतिहास क्या है?'
+      ];
+    } else if (lower.includes('html') || lower.includes('css')) {
+      questions = [
+        'HTML5 ke naye features aur tags kaunse hain?',
+        'CSS Flexbox aur Grid mein kya difference hai?',
+        'HTML aur CSS se responsive webpage kaise banate hain?'
+      ];
+    } else if (lower.includes('hello') || lower.includes('hi ') || lower === 'hello' || lower === 'hi') {
+      questions = [
+        'Internet kya hai aur kaise kaam karta hai?',
+        'Artificial Intelligence ke baare mein samjhaiye',
+        'Aaj ka koi trending tech ya general knowledge topic'
+      ];
+    } else {
+      questions = [
+        'Is topic ke practical examples aur real-world uses kya hain?',
+        'Iske advantages aur disadvantages kya hain?',
+        'Isko step-by-step detail mein kaise samjhein?'
       ];
     }
   }
@@ -137,8 +183,8 @@ function processMessageContent(content: string) {
   cleanText = cleanText.replace(/!\[[^\]]*\]\(\s*\)/g, '');
   cleanText = cleanText.replace(/\[[^\]]*\]\(\s*\)/g, '');
 
-  // Clean up any duplicate/excessive spaces
-  cleanText = cleanText.replace(/\s+/g, ' ').trim();
+  // Clean up any duplicate horizontal spaces while preserving newlines
+  cleanText = cleanText.replace(/[^\S\r\n]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
 
   return { cleanText, imageUrls };
 }
@@ -367,7 +413,8 @@ function StreamingText({
   onComplete, 
   onUpdate,
   active = true,
-  onTextUpdate
+  onTextUpdate,
+  theme = 'dark'
 }: { 
   key?: string;
   content: string; 
@@ -375,6 +422,7 @@ function StreamingText({
   onUpdate?: () => void;
   active?: boolean; 
   onTextUpdate?: (text: string) => void;
+  theme?: 'dark' | 'light';
 }) {
   const [displayedText, setDisplayedText] = useState(active ? "" : content);
   const wordsRef = useRef<string[]>([]);
@@ -443,7 +491,7 @@ function StreamingText({
     };
   }, [content, active]);
 
-  return <span className="transition-all duration-150">{displayedText}</span>;
+  return <MarkdownRenderer content={displayedText} theme={theme} className="transition-all duration-150" />;
 }
 
 const MOTIVATIONAL_QUOTES = [
@@ -648,6 +696,25 @@ export default function App() {
       const email = parsedUser.email;
       const username = parsedUser.username;
 
+      // Check if user is marked banned locally
+      if (parsedUser.isBanned) {
+        handleLogout();
+        return false;
+      }
+
+      // Check local registered users list for ban status
+      try {
+        const rawLocalUsers = localStorage.getItem('blackbell_registered_users');
+        if (rawLocalUsers) {
+          const localList = JSON.parse(rawLocalUsers);
+          const found = Array.isArray(localList) && localList.find((u: any) => u.email === email);
+          if (found && found.isBanned) {
+            handleLogout();
+            return false;
+          }
+        }
+      } catch (e) {}
+
       // Try logging in first
       let res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -655,7 +722,13 @@ export default function App() {
         body: JSON.stringify({ email, password: savedPassword })
       });
 
-      // If login fails (user does not exist because DB was reset), register
+      // Strict ban enforcement: if 403, user is permanently banned!
+      if (res.status === 403) {
+        handleLogout();
+        return false;
+      }
+
+      // If login fails because user does not exist on fresh backend, register
       if (!res.ok) {
         res = await fetch('/api/auth/register', {
           method: 'POST',
@@ -1375,7 +1448,7 @@ export default function App() {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
           controller.abort();
-        }, 12000);
+        }, 3000);
 
         try {
           const response = await fetch('/api/tts', {
@@ -1392,11 +1465,33 @@ export default function App() {
           if (response.ok) {
             const data = await response.json();
             if (data.audio) {
-              const played = await playBase64WavInWebAudio(data.audio, () => {
-                setPlayingMessageId(null);
-                setIsAiSpeaking(false);
-              });
-              if (played) {
+              if (data.format === 'wav' || data.audio.startsWith('UklGR')) {
+                try {
+                  const audio = new Audio(`data:audio/wav;base64,${data.audio}`);
+                  audio.onended = () => {
+                    setPlayingMessageId(null);
+                    setIsAiSpeaking(false);
+                  };
+                  audio.onerror = () => {
+                    playAudioChunk(data.audio, () => {
+                      setPlayingMessageId(null);
+                      setIsAiSpeaking(false);
+                    });
+                  };
+                  await audio.play();
+                  success = true;
+                } catch (audioErr) {
+                  playAudioChunk(data.audio, () => {
+                    setPlayingMessageId(null);
+                    setIsAiSpeaking(false);
+                  });
+                  success = true;
+                }
+              } else {
+                playAudioChunk(data.audio, () => {
+                  setPlayingMessageId(null);
+                  setIsAiSpeaking(false);
+                });
                 success = true;
               }
             }
@@ -1428,12 +1523,46 @@ export default function App() {
 
       if (!success) {
         if ('speechSynthesis' in window) {
-          // Clean content up to the questions section to avoid reading visual options aloud
+          // Speak clean content up to the questions section to avoid talking out loud the visual menu options
           const cleanText = text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
-          speakWithBrowserVoice(cleanText, () => {
+          const utterance = new SpeechSynthesisUtterance(cleanText);
+          
+          const voices = window.speechSynthesis.getVoices();
+          let chosenVoice = null;
+          if (personality === 'black') {
+            chosenVoice = voices.find(v => 
+              (v.name.toLowerCase().includes('male') || v.name.toLowerCase().includes('david') || v.name.toLowerCase().includes('george') || v.name.toLowerCase().includes('guy') || v.name.toLowerCase().includes('rishi') || v.name.toLowerCase().includes('prabhat')) && !v.name.toLowerCase().includes('female')
+            ) || voices.find(v => v.lang.startsWith('hi')) || voices[0];
+          } else {
+            chosenVoice = voices.find(v => 
+              v.lang.startsWith('hi') || 
+              (v.name.toLowerCase().includes('google') && v.lang.startsWith('en') && v.name.toLowerCase().includes('female')) ||
+              v.name.toLowerCase().includes('female') || 
+              v.name.toLowerCase().includes('zira') || 
+              v.name.toLowerCase().includes('samantha')
+            ) || voices[0];
+          }
+          
+          if (chosenVoice) {
+            utterance.voice = chosenVoice;
+            utterance.lang = chosenVoice.lang || (personality === 'black' ? 'en-IN' : 'hi-IN');
+          } else {
+            utterance.lang = personality === 'black' ? 'en-IN' : 'hi-IN';
+          }
+          utterance.rate = personality === 'black' ? 1.02 : 1.05;
+          utterance.pitch = personality === 'black' ? 0.78 : 1.1; 
+          utterance.onstart = () => {
+            setIsAiSpeaking(true);
+          };
+          utterance.onend = () => {
             setPlayingMessageId(null);
             setIsAiSpeaking(false);
-          });
+          };
+          utterance.onerror = () => {
+            setPlayingMessageId(null);
+            setIsAiSpeaking(false);
+          };
+          window.speechSynthesis.speak(utterance);
         } else {
           setPlayingMessageId(null);
           setIsAiSpeaking(false);
@@ -2485,9 +2614,15 @@ export default function App() {
       };
 
       recognition.onresult = (event: any) => {
-        // While AI is generating or speaking, strictly ignore microphone input to prevent speaker acoustic echo from cutting off the AI voice
-        if (voiceStateRef.current !== 'listening') {
-          return;
+        // Barge-in: User speaks while AI is speaking
+        if (voiceStateRef.current === 'speaking' || voiceStateRef.current === 'processing') {
+          stopAllVoicePlayback();
+          if (directVoiceAbortControllerRef.current) {
+            directVoiceAbortControllerRef.current.abort();
+            directVoiceAbortControllerRef.current = null;
+          }
+          voiceStateRef.current = 'listening';
+          currentTurnSpeechRef.current = '';
         }
 
         let fullAccumulated = '';
@@ -3504,23 +3639,46 @@ export default function App() {
         }
       }
 
-      // Default high-frequency community questions
-      const defaultQuestions: { [q: string]: number } = {
-        "Blackbell tum kaun ho aur kya kar sakti ho?": 342,
-        "Science calculator app banao (/build)": 285,
-        "Mario game single-file index.html banao": 224,
-        "Internet ke complete handwritten study notes (/note)": 198,
-        "Cute puppy aur anime princess ki image banao (/image)": 176,
-        "Exam revision aur daily study motivation tips": 142,
-        "Dark mode toggle aur sound effects add karo (/rebuild)": 118,
-        "Hinglish me best romantic shayari sunao": 96
-      };
-
-      const mergedQuestions = { ...defaultQuestions, ...extractedQuestions };
-      const topAskedQuestions = Object.entries(mergedQuestions)
+      // Only use real user questions extracted from actual session messages
+      const topAskedQuestions = Object.entries(extractedQuestions)
         .map(([question, count]) => ({ question, count }))
         .sort((a, b) => b.count - a.count)
         .slice(0, 10);
+
+      // Extract real feature usage by scanning actual message contents
+      let textChatCount = 0;
+      let imageGenCount = 0;
+      let buildCount = 0;
+      let noteCount = 0;
+      let fileUploadCount = 0;
+
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('blackbell_sessions')) {
+          try {
+            const raw = localStorage.getItem(key);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) {
+                parsed.forEach((s: any) => {
+                  if (Array.isArray(s.messages)) {
+                    s.messages.forEach((m: any) => {
+                      if (m.role === 'user' && m.content) {
+                        const low = m.content.toLowerCase().trim();
+                        if (low.startsWith('/image')) imageGenCount++;
+                        else if (low.startsWith('/build') || low.startsWith('/rebuild')) buildCount++;
+                        else if (low.startsWith('/note')) noteCount++;
+                        else if (m.isAttachment) fileUploadCount++;
+                        else textChatCount++;
+                      }
+                    });
+                  }
+                });
+              }
+            }
+          } catch (e) {}
+        }
+      }
 
       const now = Date.now();
       const enrichedUsers = users.map((u: any) => {
@@ -3530,10 +3688,10 @@ export default function App() {
           ...u,
           online: isCurrent ? true : (u.online ?? (now - (u.lastSeen || 0) < 600000)),
           lastPing: isCurrent ? now : (u.lastPing || u.lastSeen || (now - 45000)),
-          activeDuration: u.activeDuration || Math.max(300, Math.floor((now - (u.createdAt || (now - 7200000))) / 1000)),
+          activeDuration: u.activeDuration || Math.max(30, Math.floor((now - (u.createdAt || (now - 7200000))) / 1000)),
           role: isUserAdmin ? 'admin' : (u.role || 'user'),
-          messagesCount: u.messagesCount || (isCurrent ? Math.max(totalMessages, 38) : 24),
-          sessionsCount: u.sessionsCount || (isCurrent ? Math.max(totalConversations, 4) : 2)
+          messagesCount: u.messagesCount || (isCurrent ? totalMessages : 0),
+          sessionsCount: u.sessionsCount || (isCurrent ? totalConversations : 0)
         };
       });
 
@@ -3549,26 +3707,26 @@ export default function App() {
         totalUsers,
         onlineUsers,
         bannedUsers,
-        returningUsers: Math.max(1, totalUsers - 1),
-        totalConversations: Math.max(totalConversations, 1),
-        totalMessages: Math.max(totalMessages, 16),
+        returningUsers: Math.max(0, totalUsers - 1),
+        totalConversations,
+        totalMessages,
         avgResponseTime: 0.35,
-        aiHealthScore: 99.8,
+        aiHealthScore: 100.0,
         hourlyActivity,
-        peakTimeRange: '9:00 PM - 11:00 PM',
-        mostActiveDay: 'Sunday',
-        avgMessagesPerHour: 42,
-        mostActiveDevice: 'Mobile Android (78%)',
+        peakTimeRange: 'Live Telemetry',
+        mostActiveDay: 'Today',
+        avgMessagesPerHour: totalMessages > 0 ? Math.ceil(totalMessages / 24) : 0,
+        mostActiveDevice: 'Web & Mobile Client',
         topAskedQuestions,
         featureUsage: {
-          textChat: totalMessages || 45,
-          voiceChat: 18,
-          imageGen: 12,
-          fileUpload: 6,
-          knowledgeSearch: 9
+          textChat: textChatCount,
+          voiceChat: 0,
+          imageGen: imageGenCount,
+          fileUpload: fileUploadCount,
+          knowledgeSearch: buildCount + noteCount
         },
         traffic: [
-          { date: new Date().toISOString().split('T')[0], visits: 48, chatsCount: totalConversations || 14 }
+          { date: new Date().toISOString().split('T')[0], visits: Math.max(1, totalUsers), chatsCount: totalConversations }
         ],
         systemSettings
       }));
@@ -4023,7 +4181,7 @@ export default function App() {
                 {m.role === 'user' ? 'USER' : 'BLACKBELL'}
               </span>
               <div className={`flex items-end gap-2.5 ${hasAppCode ? 'w-full max-w-[98%] sm:max-w-[90%]' : 'max-w-[85%]'}`}>
-                <div className={`p-4 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${hasAppCode ? 'w-full' : ''} ${
+                <div className={`p-4 rounded-2xl text-sm leading-relaxed ${m.role === 'user' ? 'whitespace-pre-wrap font-medium' : ''} ${hasAppCode ? 'w-full' : ''} ${
                   m.role === 'user' 
                     ? 'bg-[#5b3eff] text-white rounded-tr-sm font-medium' 
                     : `${theme === 'light' ? 'bg-white text-gray-800 border-gray-200' : 'bg-[#1c1c1c] text-gray-300 border-white/5'} rounded-tl-sm border shadow-md font-medium`
@@ -4048,6 +4206,7 @@ export default function App() {
                                    }}
                                    content={processedBefore.cleanText} 
                                    active={i === messages.length - 1 && !completedStreams[streamKey]} 
+                                   theme={theme}
                                    onComplete={() => {
                                      if (!processedAfter.cleanText) {
                                        setCompletedStreams(prev => ({ ...prev, [streamKey]: true }));
@@ -4088,6 +4247,7 @@ export default function App() {
                                    }}
                                    content={processedAfter.cleanText} 
                                    active={i === messages.length - 1 && !completedStreams[streamKey]} 
+                                   theme={theme}
                                    onComplete={() => {
                                      setCompletedStreams(prev => ({ ...prev, [streamKey]: true }));
                                    }} 
@@ -4119,6 +4279,7 @@ export default function App() {
                                }}
                                content={cleanDisplayContent} 
                                active={i === messages.length - 1 && !completedStreams[streamKey]} 
+                               theme={theme}
                                onComplete={() => {
                                  setCompletedStreams(prev => ({ ...prev, [streamKey]: true }));
                                }} 

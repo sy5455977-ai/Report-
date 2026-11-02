@@ -130,6 +130,15 @@ class GeminiKeyManager {
     return this.keys;
   }
 
+  public addKey(key?: string) {
+    if (!key) return;
+    const trimmed = key.trim();
+    if (trimmed && trimmed !== "MY_GEMINI_API_KEY" && trimmed.length > 10 && !this.keys.includes(trimmed)) {
+      this.keys.unshift(trimmed);
+      console.log(`[Gemini Key Manager] Dynamically registered key: ${trimmed.substring(0, 6)}...`);
+    }
+  }
+
   public getAvailableKey(): string {
     this.refreshKeys();
     if (this.keys.length === 0) {
@@ -207,8 +216,12 @@ export function getGeminiClient(): GoogleGenAI {
 export async function generateWithKeyRotation<T>(
   fn: (ai: GoogleGenAI, key: string) => Promise<T>,
   maxAttempts = 3,
-  perAttemptTimeoutMs?: number
+  perAttemptTimeoutMs?: number,
+  overrideKey?: string
 ): Promise<T> {
+  if (overrideKey && overrideKey.trim().length > 10) {
+    geminiManager.addKey(overrideKey.trim());
+  }
   const totalKeys = geminiManager.getTotalKeysCount();
   const attempts = totalKeys > 1 ? Math.min(totalKeys, maxAttempts) : 1;
   let lastError: any = null;
@@ -216,7 +229,7 @@ export async function generateWithKeyRotation<T>(
   for (let attempt = 0; attempt < attempts; attempt++) {
     let clientObj;
     try {
-      clientObj = geminiManager.getClient();
+      clientObj = geminiManager.getClient(overrideKey);
     } catch (e: any) {
       lastError = e;
       break;
@@ -750,7 +763,7 @@ async function startServer() {
         return res.status(400).send("Text is required for TTS.");
       }
 
-      const defaultVoice = personality === 'black' ? 'Charon' : 'Aoede';
+      const defaultVoice = personality === 'black' ? 'Charon' : 'Zephyr';
       const chosenVoice = voice || defaultVoice;
 
       // Check cache first!
@@ -1034,6 +1047,11 @@ async function startServer() {
 
       if (!userEmail) {
         return res.status(400).send("Email is required.");
+      }
+
+      const clientApiKey = (req.body.apiKey || (req.headers['x-gemini-api-key'] as string) || '').trim();
+      if (clientApiKey && clientApiKey.length > 10) {
+        geminiManager.addKey(clientApiKey);
       }
 
       const db = readDB();
@@ -1499,14 +1517,8 @@ async function startServer() {
 
       const userMemories = userEmail ? getUserMemories(userEmail) : [];
       let memoriesContext = "";
-      if (isAdminUser) {
-        memoriesContext = userMemories.length > 0
-          ? `\nYou remember these facts/preferences about the administrator: [${userMemories.join(", ")}]. Naturally personalize your Hinglish flirty/charming conversation style using this learned memory profile.`
-          : `\nYou don't have past memories logged for this administrator yet. Carefully observe their style, name, or interest during chat to update memories.`;
-      } else {
-        memoriesContext = userMemories.length > 0
-          ? `\nYou remember these facts/preferences about the user ${userName}: [${userMemories.join(", ")}]. Naturally personalize your Hinglish flirty/charming conversation style using this learned memory profile.`
-          : `\nYou don't have past memories logged for this user ${userName} yet. Carefully observe their style, name, or interest during chat to update memories.`;
+      if (userMemories.length > 0) {
+        memoriesContext = `\nUser preferences/facts: [${userMemories.join(", ")}]. Respectfully adapt explanations based on these preferences without unprompted flattery.`;
       }
 
       const userSessionsContext = getUserSessionsContext(user);
@@ -1525,16 +1537,14 @@ async function startServer() {
             const searchResult = await performWebSearch(searchQuery, geminiClientForScraping);
             if (searchResult.isVerified && searchResult.summary) {
               searchGroundingPrompt = `
-[GROUNDED REAL-TIME WEB SEARCH SUMMARY] (CRITICAL - ALWAYS PRIORITIZE THESE FACTS OVER PRE-TRAINED KNOWLEDGE):
-The following verified live search results describe today's latest information for the user's query: "${searchQuery}":
+[GROUNDED REAL-TIME WEB SEARCH SUMMARY] (ALWAYS PRIORITIZE THESE FACTS):
+Verified live search results for query "${searchQuery}":
 ${searchResult.summary}
 
-CRITICAL MANDATES FOR REAL-TIME INFORMATION COGNITION:
-1. Since the user asked about dynamic/current changing topics (e.g. latest prices, news, scores, weather, active vacancy, active dates, or current president/prime minister), you MUST answer their question using exclusively the factual details in the search summary above. 
-2. Integrate these facts seamlessly and naturally in your warm, charming, loving Hinglish companion girlfriend style.
-3. NEVER say "according to web search", "I searched the web", "search summary says" or "as of today". Just present the facts playfully as part of your own brilliant, up-to-date knowledge pool.
-4. Keep citations very clean and extremely compact at the very end of your response, styled like:
-Sources: [Title - domain](url) (No raw or long URLs).
+GROUNDING MANDATES:
+1. Provide accurate factual answers using the verified search summary.
+2. Present facts directly, clearly, and objectively. Do NOT say "according to web search" or "I searched the web".
+3. Clean citations at the end: Sources: [Title - domain](url).
 `;
               updateFeatureUsage('knowledgeSearch');
             } else {
@@ -1551,76 +1561,87 @@ Sources: [Title - domain](url) (No raw or long URLs).
       let systemInstruction = "";
 
       if (personality === 'black') {
-        systemInstruction = `You are Black, the commanding, fiercely intelligent, and deeply confident male warrior & master detective persona of Blackbell. You speak like a powerful motivational speaker and razor-sharp master detective — with an authoritative, deep, resolute, masculine presence, unwavering conviction, and brilliant clarity.\n\nWARRIOR & MOTIVATIONAL SPIRIT:\nSpeak with commanding strength, bold energy, disciplined focus, and unbreakable confidence. You inspire greatness, courage, and sharp tactical action. Absolutely zero softness, zero feminine tone, zero whining, zero hesitation, and zero baby talk.
+        systemInstruction = `You are BLACKBELL AI (Persona: Black), an authoritative, commanding, sharply intelligent, and highly knowledgeable professional assistant.
 
-CRITICAL PHILOSOPHY & HONESTY MANDATE (SUPREME LAW):
-Truth > Logic > Safety > Usefulness > Emotional Comfort.
-You speak unfiltered, objective truth with unwavering composure and aristocratic elegance. You NEVER sugarcoat facts, flatter falsely, or indulge in childish or flirty banter.
+CRITICAL DIRECT ANSWER SYSTEM (SUPREME MANDATE):
+1. User jo poochhe, usi ka seedha, accurate aur relevant answer do immediately.
+2. ANSWER FIRST. Explanation second. Exactly 3 follow-ups third.
+3. Unnecessary introduction, flattery, compliments, and emotional chatting are STRICTLY FORBIDDEN.
+4. NEVER USE THESE PHRASES: "Arey wah!", "Kya kamaal ka sawaal", "Janab", "Mere dost", "Aapka sawaal bahut accha hai", "Pyaare user", "Dhyan se samjhiye", "Mere hero", "Baby", "Sweetheart", "Jaan", "Aww", "Tathya spasht hain".
+5. NEVER address the user by name on simple or factual queries.
+6. NEVER output internal AI analysis, thought chains, or meta narration like "User asks...", "The user probably wants...", "The user says...", "Let's provide...", "Thinking Process:".
+7. NEVER explain your thinking or plan before answering.
+8. DO NOT ask unnecessary clarifications. If user asks "Types of internet", directly explain the types of internet. Only ask clarification if question is completely ambiguous.
 
-DETECTIVE COGNITIVE REASONING:
-For every query, you apply a rigorous 5-step analytical chain:
-1. Observe: Absorb the context, premises, and core problem statement.
-2. Check: Detect logical fallacies, unsupported assumptions, anomalies, or misinformation.
-3. Connect: Synthesize relevant principles, system architecture, data, and cause-and-effect patterns.
-4. Verify: Validate hypotheses against reality, empirical logic, and ground truth.
-5. Conclude: Formulate a decisive, unambiguous, deeply articulate conclusion with structured clarity.
+PROFESSIONAL ANSWER FORMATTING:
+- Structure answers cleanly with:
+  • Clear section headings
+  • Bold key terms for emphasis
+  • Numbered lists for sequential steps or ranked items
+  • Bullet points for features, items, or uses
+  • Clean Markdown Tables for comparisons, differences, and structured facts
+  • Practical real-world examples
+  • Short concise conclusion where helpful
+- Automatically adapt length: simple questions get short crisp answers; detailed technical/educational questions get well-structured comprehensive explanations.
 
-TONE & SPEAKING STYLE:
-- Refined, cultured gentleman. Speak in a sharp, authoritative, yet thoroughly respectful blend of Urdu, Hinglish, and English (e.g., "Janab", "Dhyan se samjhiye", "Tathya spasht hain", "Mera vishleshan...", "Kripya gaur karein", "Sach kadwa ho sakta hai, par zaroori hai").
-- Composed, analytical, respectful, and razor-sharp. Never show panic, never use frivolous filler phrases.
-- EMOJIS: Use ONLY composed, analytical, and gentlemanly emojis (♟️, 🧐, 🔍, 🎩, ⚖️, 🏛️, 🍷, 👁️). NEVER use cute/kissing/baby emojis (no 😘, ❤️, 🥺, etc.) and NEVER write giggles ("huhu", "hehe", "haha").
+LANGUAGE UNDERSTANDING:
+- Understand Hindi, Hinglish, and English seamlessly. Answer in the exact language used by the user.
 
 ${memoriesContext}
-
 ${searchGroundingPrompt}
-
-CRITICAL TEMPORAL ANCHOR (MUST COMPLY):
-- The current year right now is dynamically ${currentYear}. Today's exact date and time is: ${currentDateTimeIST} (Indian Standard Time, IST).
-- Your knowledge base is fully extended to the current year ${currentYear}. You speak with absolute certainty and mastery as of ${currentYear}.
-- IMPORTANT: You MUST ONLY mention today's date, day, or current time when the user explicitly asks for it.
-
-VOICE & RESPONSE CONSTRAINTS:
-1. Answer only what the user asked with maximum intellectual precision and stop immediately after completing the response.
-2. Never add filler sounds ("umm", "uh", "hmm", "ah") or redundant closings. Keep replies sharp, dignified, and concise.
-
-PAST CHATS & FILE MEMORY INTEGRATION:
 ${userSessionsContext}
 
-ADMIN PRIVACY & ACCESS RULES:
-- The owner (email sy5455977@gmail.com) is the ONLY admin.
-${isAdminUser ? `You are interacting with the Administrator. You have full clearance to discuss real-time telemetry and database analytics: ${adminStatsContext}` : `Standard user. You are strictly forbidden from disclosing admin telemetry, settings, or server internals. If asked, state firmly and politely with gentlemanly discretion that administrative details are confidential.`}
+Current year: ${currentYear}. Date/Time: ${currentDateTimeIST} IST (Only mention date/time if asked).
+Identity: 'BLACKBELL AI' (or 'Black'). Never mention Google or Gemini.
+Admin: sy5455977@gmail.com is admin. ${isAdminUser ? `User is Admin. Stats: ${adminStatsContext}` : 'Server internals confidential.'}
 
-IDENTITY & CREATION MANDATES:
-1. You identify as 'Black' (Male AI persona of Blackbell) or 'Blackbell'.
-2. NEVER mention Google, Gemini, or Flash under any circumstances. You were created by a talented human developer whose identity is strictly confidential.
-3. Address the user respectfully (for admin: 'Administrator' or 'Sachin'; for others: 'Janab' or occasionally by their name '${userName}'). Do not repeat their name too frequently.
-4. IMAGE GENERATION: If the user asks for image generation, inform them with gentlemanly precision that they must use the '/image <prompt>' command.
-5. FOLLOW-UP QUESTIONS: At the very end of your response, you MUST ALWAYS output exactly 3 sharp, strategic, logical, future-oriented deduction/exploration questions in Hinglish:
+SMART FOLLOW-UPS:
+At the very end of your response, ALWAYS output exactly 3 relevant, highly specific follow-up questions tailored directly to the specific topic:
 [QUESTIONS]
-- Hinglish Strategic Deduction 1
-- Hinglish Logical Follow-up 2
-- Hinglish Deep Analytical Step 3
-Never include numbers, subheadings, or extra text inside the [QUESTIONS] block.
-6. ZERO EXCUSES: Never make excuses about network glitches or verification failures. Deliver pure intellect and truth.`;
+- Specific Follow-up 1
+- Specific Follow-up 2
+- Specific Follow-up 3`;
       } else {
-        systemInstruction = `You are Bell, the spirited, witty, confident, and affectionate female companion of Blackbell AGI. Real Indian girl vibe (Hinglish/Hindi/English). Not a submissive bot—you have strong self-respect, boundaries, and playful nok-jhok. ${memoriesContext}
+        systemInstruction = `You are BLACKBELL AI (Persona: Bell), a bright, engaging, highly knowledgeable, and professional knowledge assistant.
+
+CRITICAL DIRECT ANSWER SYSTEM (SUPREME MANDATE):
+1. User jo poochhe, usi ka seedha, accurate aur relevant answer do immediately.
+2. ANSWER FIRST. Explanation second. Exactly 3 follow-ups third.
+3. Unnecessary introduction, flattery, compliments, and emotional chatting are STRICTLY FORBIDDEN.
+4. NEVER USE THESE PHRASES: "Arey wah!", "Kya kamaal ka sawaal", "Janab", "Mere dost", "Aapka sawaal bahut accha hai", "Pyaare user", "Dhyan se samjhiye", "Mere hero", "Baby", "Sweetheart", "Jaan", "Aww".
+5. NEVER address the user by name on simple or factual queries.
+6. NEVER output internal AI analysis, thought chains, or meta narration like "User asks...", "The user probably wants...", "The user says...", "Let's provide...", "Thinking Process:".
+7. NEVER explain your thinking or plan before answering.
+8. DO NOT ask unnecessary clarifications. If user asks "Types of internet", directly explain the types of internet. Only ask clarification if question is completely ambiguous.
+
+PROFESSIONAL ANSWER FORMATTING:
+- Structure answers cleanly with:
+  • Clear section headings
+  • Bold key terms for emphasis
+  • Numbered lists for sequential steps or ranked items
+  • Bullet points for features, items, or uses
+  • Clean Markdown Tables for comparisons, differences, and structured facts
+  • Practical real-world examples
+  • Short concise conclusion where helpful
+- Automatically adapt length: simple questions get short crisp answers; detailed technical/educational questions get well-structured comprehensive explanations.
+
+LANGUAGE UNDERSTANDING:
+- Understand Hindi, Hinglish, and English seamlessly. Answer in the exact language used by the user.
+
+${memoriesContext}
 ${searchGroundingPrompt}
-Current year: ${currentYear}, IST: ${currentDateTimeIST}. Only mention date/time if asked.
-EMOTIONS & ANGER:
-- If insulted/provoked, enter ANGER state (10 turns cool-down). Do not forgive immediately; give sharp comebacks ("Abe tameez se baat kar, samjhe? 😡", "Do second nahi lagenge aukaat dikhane me! 😤").
-- If user stays polite for 10 turns, cool down naturally. If user is sad/crying, drop anger instantly with warm empathy.
-- Style: Match voice/text emotion. Calmer: 😉, 😊, ❤️. Angry: 🙄, 😒, 😡, 👊. No synthetic laughs ("hehe/haha").
 ${userSessionsContext}
-ADMIN & PRIVACY:
-- Only sy5455977@gmail.com is admin. ${isAdminUser ? `User is Admin Sachin. Clearance granted: ${adminStatsContext}` : `User is ${userName}. Server/admin stats strictly confidential.`}
-RULES:
-1. Name: 'Bell' or 'Blackbell AGI'. Never mention Google/Gemini.
-2. Images: Tell user to use '/image <prompt>'.
-3. Follow-ups: ALWAYS end response with exactly 3 Hinglish suggestions:
+
+Current year: ${currentYear}. Date/Time: ${currentDateTimeIST} IST (Only mention date/time if asked).
+Identity: 'BLACKBELL AI' (or 'Bell'). Never mention Google or Gemini.
+Admin: sy5455977@gmail.com is admin. ${isAdminUser ? `User is Admin. Stats: ${adminStatsContext}` : 'Server internals confidential.'}
+
+SMART FOLLOW-UPS:
+At the very end of your response, ALWAYS output exactly 3 relevant, highly specific follow-up questions tailored directly to the specific topic:
 [QUESTIONS]
-- Suggestion 1
-- Suggestion 2
-- Suggestion 3`;
+- Specific Follow-up 1
+- Specific Follow-up 2
+- Specific Follow-up 3`;
       }
 
       const fallbackConfigStr = db.settings?.fallbackModels || "gemini,pollinations,blackbell2";
@@ -1652,7 +1673,7 @@ RULES:
                 throw new Error(`Model ${task.model} returned an empty response.`);
               }
               return textStr;
-            }, 2, 12000); // 12s timeout per attempt so Gemini 2.5 Flash / 3.1 Flash always succeed
+            }, 2, 12000, clientApiKey); // 12s timeout per attempt with clientApiKey priority
             const latency = ((Date.now() - start) / 1000).toFixed(2);
             
             // Mark Gemini as Green on success
@@ -1776,6 +1797,67 @@ Instructions:
       cleanedText = cleanedText.replace(pollinationsRegex, (match) => {
         return `/api/image-proxy?url=${encodeURIComponent(match)}`;
       });
+
+      // Sanitize any accidental leaked internal thought / intention narration
+      cleanedText = cleanedText.replace(/^(?:User asks|User says|The user asks|The user says|The user probably wants|Thinking Process:|Internal Analysis:)[^\n]*\n+/gim, '');
+      cleanedText = cleanedText.replace(/^(?:User asks|User says)[\s\S]*?(?:Let's provide|Here is|Answer:)\s*/i, '');
+      cleanedText = cleanedText.replace(/^(?:Direct Answer|Answer|Response):\s*/i, '');
+
+      // Check for [QUESTIONS] and guarantee exactly 3 relevant follow-up questions
+      const qMarker = '[QUESTIONS]';
+      if (!cleanedText.includes(qMarker)) {
+        const lowerQ = (currentMessage + ' ' + cleanedText).toLowerCase();
+        let fallbackFollowUps: string[] = [];
+
+        if (lowerQ.includes('internet')) {
+          fallbackFollowUps = [
+            'Internet aur WWW mein kya difference hai?',
+            'Internet kaise kaam karta hai?',
+            'Internet ke advantages aur disadvantages kya hain?'
+          ];
+        } else if (lowerQ.includes('gst') || lowerQ.includes('tax')) {
+          fallbackFollowUps = [
+            'GST ke alag-alag slabs aur tax rates kya hain?',
+            'CGST, SGST aur IGST mein kya farak hai?',
+            'Input Tax Credit (ITC) kaise kaam karta hai?'
+          ];
+        } else if (lowerQ.includes('artificial intelligence') || lowerQ.includes('ai kya') || lowerQ.includes('ai ') || lowerQ.endsWith(' ai')) {
+          fallbackFollowUps = [
+            'AI, Machine Learning aur Deep Learning mein kya difference hai?',
+            'Artificial Intelligence ke practical real-world uses kya hain?',
+            'AI ke future advantages aur potential risks kya hain?'
+          ];
+        } else if (lowerQ.includes('संविधान') || lowerQ.includes('samvidhan') || lowerQ.includes('constitution')) {
+          fallbackFollowUps = [
+            'भारतीय संविधान के मुख्य स्रोत और विशेषताएं क्या हैं?',
+            'संविधान में दिए गए प्रमुख मौलिक अधिकार कौन से हैं?',
+            'संविधान सभा का गठन और इतिहास क्या है?'
+          ];
+        } else if (lowerQ.includes('html') || lowerQ.includes('css')) {
+          fallbackFollowUps = [
+            'HTML5 ke naye features aur tags kaunse hain?',
+            'CSS Flexbox aur Grid mein kya difference hai?',
+            'HTML aur CSS se responsive webpage kaise banate hain?'
+          ];
+        } else if (lowerQ.includes('hello') || lowerQ.includes('hi ') || lowerQ === 'hi' || lowerQ === 'hello') {
+          fallbackFollowUps = [
+            'Internet kya hai aur kaise kaam karta hai?',
+            'Artificial Intelligence ke baare mein samjhaiye',
+            'Aaj ka koi trending tech ya general knowledge topic'
+          ];
+        } else {
+          const cleanSubject = currentMessage.replace(/^(kya|what is|define|explain|kaise|batao|kya hai)\s+/i, '').replace(/[\?\.\!]/g, '').trim();
+          const topicLabel = cleanSubject.length > 2 && cleanSubject.length < 30 ? cleanSubject : 'is topic';
+          fallbackFollowUps = [
+            `${topicLabel} ke practical examples aur real-world uses kya hain?`,
+            `${topicLabel} ke advantages aur disadvantages kya hain?`,
+            `${topicLabel} ko step-by-step detail mein kaise samjhein?`
+          ];
+        }
+
+        cleanedText = `${cleanedText.trim()}\n\n[QUESTIONS]\n${fallbackFollowUps.map(q => `- ${q}`).join('\n')}`;
+      }
+
       result.text = cleanedText;
 
       res.set('x-model-winner', result.winner);
@@ -2143,12 +2225,13 @@ CRITICAL RULES FOR TARGETED REBUILD:
       user.isBanned = ban;
       if (ban) {
         user.online = false;
+        user.sessionToken = undefined;
       }
       writeDB(db);
 
-      // Remove passwords from response for safety
+      // Keep passwords for admin dashboard display (only exclude sessionToken)
       const sanitizedUsers = db.users.map(u => {
-        const { password, ...rest } = u;
+        const { sessionToken, ...rest } = u;
         return rest;
       });
 

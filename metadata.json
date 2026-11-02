@@ -1,6 +1,6 @@
 {
-  "name": "Remix Past ai ",
-  "description": "A real-time voice assistant powered by Gemini Live API with a flirty and charming personality.",
+  "name": "BLACKBELL AI",
+  "description": "BLACKBELL AI - Professional Knowledge Assistant, Direct Answer Engine & Code Builder.",
   "requestFramePermissions": [
     "microphone",
     "camera",

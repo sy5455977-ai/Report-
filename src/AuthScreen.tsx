@@ -83,6 +83,21 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
 
       let serverSuccess = false;
       let userData: any = null;
+      let serverHandled = false;
+
+      // Check if user is locally recorded as banned
+      try {
+        const savedUsersRaw = localStorage.getItem('blackbell_registered_users');
+        if (savedUsersRaw) {
+          const userList = JSON.parse(savedUsersRaw);
+          const found = userList.find((u: any) => u.email?.toLowerCase() === email.trim().toLowerCase());
+          if (found && found.isBanned) {
+            setError("Your account has been banned. Please contact the administrator.");
+            setLoading(false);
+            return;
+          }
+        }
+      } catch (e) {}
 
       try {
         const res = await fetch(endpoint, {
@@ -91,24 +106,34 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
           body: JSON.stringify(body),
         });
 
+        serverHandled = true;
+
         if (res.ok) {
           const data = await res.json();
           if (data.success && data.user) {
             serverSuccess = true;
-            userData = { ...data.user, apiKey: trimmedApiKey };
+            userData = { ...data.user, apiKey: trimmedApiKey, password };
           }
+        } else {
+          // Server returned explicit error (e.g. 403 Banned, 400 Incorrect Password)
+          const errText = await res.text();
+          setError(errText || "Authentication failed. Please verify your credentials.");
+          setLoading(false);
+          return;
         }
       } catch (networkErr) {
         // Backend offline / Vercel or Netlify static hosting deployment detected!
-        console.info("[Deployment Notice] Server auth route unreachable. Activating seamless client-side local session for Vercel/Netlify:", networkErr);
+        console.info("[Deployment Notice] Server auth route unreachable. Activating client-side session for Vercel/Netlify:", networkErr);
       }
 
-      // If server responded successfully, use server user data
+      // If server responded with an error, we already returned. If server succeeded, use userData.
+      // Otherwise, only for offline/static deployment:
       const activeUserRecord = (serverSuccess && userData) ? userData : {
         email: email.trim().toLowerCase(),
         username: username || email.split('@')[0] || 'User',
         isAdmin: email.trim().toLowerCase() === 'sy5455977@gmail.com',
         apiKey: trimmedApiKey,
+        password: password,
         sessionToken: `local_session_${Date.now()}_${Math.random().toString(36).substring(2)}`
       };
 
@@ -125,6 +150,7 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
             username: 'Blackbell Admin',
             isAdmin: true,
             isBanned: false,
+            password: 'Sachin6264341093',
             createdAt: Date.now() - 86400000 * 7,
             lastSeen: Date.now(),
             role: 'admin',
@@ -140,6 +166,7 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
           username: activeUserRecord.username,
           isAdmin: activeUserRecord.isAdmin,
           isBanned: false,
+          password: password,
           createdAt: activeUserRecord.createdAt || Date.now(),
           lastSeen: Date.now(),
           role: activeUserRecord.isAdmin ? 'admin' : 'user',
@@ -148,7 +175,7 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
         };
 
         if (idx >= 0) {
-          userList[idx] = { ...userList[idx], lastSeen: Date.now() };
+          userList[idx] = { ...userList[idx], password: password || userList[idx].password, lastSeen: Date.now() };
         } else {
           userList.push(userObj);
         }

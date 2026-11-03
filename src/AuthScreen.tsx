@@ -106,20 +106,38 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
           body: JSON.stringify(body),
         });
 
-        serverHandled = true;
+        const contentType = res.headers.get('content-type') || '';
+        const isHtml = contentType.includes('text/html');
 
-        if (res.ok) {
-          const data = await res.json();
-          if (data.success && data.user) {
+        if (res.ok && !isHtml) {
+          const data = await res.json().catch(() => null);
+          if (data?.success && data?.user) {
             serverSuccess = true;
             userData = { ...data.user, apiKey: trimmedApiKey, password };
           }
-        } else {
-          // Server returned explicit error (e.g. 403 Banned, 400 Incorrect Password)
-          const errText = await res.text();
-          setError(errText || "Authentication failed. Please verify your credentials.");
-          setLoading(false);
-          return;
+        } else if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          const isStaticHostHtml = 
+            res.status === 404 || 
+            res.status === 502 || 
+            res.status === 503 ||
+            isHtml || 
+            errText.trim().startsWith('<!DOCTYPE') || 
+            errText.includes('<html') ||
+            errText.includes('hosted on Netlify') ||
+            errText.includes('<title>Not found</title>');
+
+          if (isStaticHostHtml) {
+            // Netlify, Vercel, or Hostinger static hosting detected (no backend auth endpoint)
+            console.info("[Deployment Notice] Static hosting environment detected without backend endpoint. Activating local client-side authentication.");
+            // Do not setError to raw HTML; proceed smoothly to local client authentication below.
+          } else {
+            // Real backend server returned a genuine business logic error (e.g. 403 Banned, 400 Incorrect Password)
+            const cleanErr = errText.replace(/<[^>]*>/g, '').trim();
+            setError(cleanErr || "Authentication failed. Please verify your credentials.");
+            setLoading(false);
+            return;
+          }
         }
       } catch (networkErr) {
         // Backend offline / Vercel or Netlify static hosting deployment detected!
@@ -127,11 +145,34 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
       }
 
       // If server responded with an error, we already returned. If server succeeded, use userData.
-      // Otherwise, only for offline/static deployment:
+      // Otherwise, verify local credentials for static hosting deployments:
+      const cleanEmail = email.trim().toLowerCase();
+      if (!serverSuccess) {
+        try {
+          const savedUsersRaw = localStorage.getItem('blackbell_registered_users');
+          const userList = savedUsersRaw ? JSON.parse(savedUsersRaw) : [];
+          if (Array.isArray(userList)) {
+            const foundUser = userList.find((u: any) => u.email?.toLowerCase() === cleanEmail);
+            if (foundUser) {
+              if (foundUser.isBanned) {
+                setError("Your account has been banned. Please contact the administrator.");
+                setLoading(false);
+                return;
+              }
+              if (mode === 'signin' && foundUser.password && foundUser.password !== password) {
+                setError("Incorrect password. Please enter the correct password.");
+                setLoading(false);
+                return;
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
       const activeUserRecord = (serverSuccess && userData) ? userData : {
-        email: email.trim().toLowerCase(),
-        username: username || email.split('@')[0] || 'User',
-        isAdmin: email.trim().toLowerCase() === 'sy5455977@gmail.com',
+        email: cleanEmail,
+        username: username || cleanEmail.split('@')[0] || 'User',
+        isAdmin: cleanEmail === 'sy5455977@gmail.com',
         apiKey: trimmedApiKey,
         password: password,
         sessionToken: `local_session_${Date.now()}_${Math.random().toString(36).substring(2)}`
@@ -249,7 +290,11 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
         {error && (
           <div className="w-full mb-4 flex items-start gap-2.5 p-3.5 bg-red-950/30 border border-red-500/40 rounded-xl text-red-300 text-xs animate-fade-in leading-relaxed">
             <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-red-400" />
-            <span className="flex-1">{error}</span>
+            <span className="flex-1">
+              {error.startsWith('<!DOCTYPE') || error.includes('<html') 
+                ? 'Authentication is running in static deployment mode. Please try signing in.' 
+                : error.replace(/<[^>]*>/g, '').trim()}
+            </span>
           </div>
         )}
 

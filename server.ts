@@ -47,10 +47,10 @@ export function getRealTimeStatus(modelKey: "gemini" | "pollinations" | "blackbe
   return record.status as "Green" | "Red";
 }
 
-// Ultra-fast model cascade: Primary is Gemini 2.5 Flash, followed by Gemini 3.1 Flash on rate limit exhaustion
+// Ultra-fast model cascade: Primary is Gemini 3.8 Flash, followed by Gemini 3.1 Flash Lite on rate limit exhaustion
 export const GEMINI_CASCADE_MODELS = [
-  { name: "Gemini 2.5 Flash", model: "gemini-2.5-flash" },
-  { name: "Gemini 3.1 Flash", model: "gemini-3.1-flash-lite" }
+  { name: "Gemini 3.8 Flash", model: "gemini-3.8-flash" },
+  { name: "Gemini 3.1 Flash Lite", model: "gemini-3.1-flash-lite" }
 ];
 
 export const dailyModelTracker = {
@@ -1692,8 +1692,6 @@ At the very end of your response, ALWAYS output exactly 3 relevant, highly speci
               };
               if (task.model === "gemini-3.1-flash-lite") {
                 config.thinkingConfig = { thinkingLevel: ThinkingLevel.MINIMAL };
-              } else if (task.model.includes("2.5") || task.model.includes("flash")) {
-                config.thinkingConfig = { thinkingLevel: ThinkingLevel.MINIMAL };
               }
               const resp = await ai.models.generateContent({
                 model: task.model,
@@ -1741,7 +1739,7 @@ At the very end of your response, ALWAYS output exactly 3 relevant, highly speci
 
       let result = null;
 
-      // 1. Primary execution: User's 6-model Gemini cascade (3.1-Flash-Live, 2.5-Flash, 3.5, 3.6, 3.7, 3.8)
+      // 1. Primary execution: Cloud Gemini Cascade
       try {
         result = await runCascadingModels();
       } catch (cascadeError) {
@@ -1765,12 +1763,12 @@ At the very end of your response, ALWAYS output exactly 3 relevant, highly speci
         }
       }
 
-      // 4. Absolute default fallback so chat never fails under any configuration or complete blackouts
+      // 3. Absolute default fallback so chat never fails under any configuration
       if (!result) {
         const memories = userEmail ? getUserMemories(userEmail) : [];
         const bb2Text = generateBlackbell2Response(currentMessage, rawMessages, userName, memories);
         result = {
-          text: bb2Text + "\n\n(Note: Sabhi active fallback models temporarily unreachable hain baby, isiliye maine local brain se reply diya hai! 😘)",
+          text: bb2Text,
           winner: "Blackbell 2.0 (Autonomous Local Brain)",
           latency: "0.01"
         };
@@ -1900,7 +1898,16 @@ Instructions:
       apiPerformance.failedRequests += 1;
       logError("API Errors", error?.message || String(error));
       console.error("Gemini Chat API Error:", error);
-      res.status(500).send(`Server Error: ${error?.message || error || "Gemini backend failed."}`);
+      try {
+        const lastMsg = req.body?.messages?.[req.body?.messages?.length - 1];
+        const query = lastMsg?.content || "Hello";
+        const bb2Text = generateBlackbell2Response(query, req.body?.messages || [], "User", []);
+        res.set('x-model-winner', 'Blackbell 2.0 (Autonomous Local Brain)');
+        res.set('x-model-latency', '0.01');
+        res.send(bb2Text);
+      } catch (innerErr) {
+        res.status(500).send(`Server Error: ${error?.message || error || "Gemini backend failed."}`);
+      }
     }
   });
 

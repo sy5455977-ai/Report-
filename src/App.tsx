@@ -1884,8 +1884,8 @@ export default function App() {
     setIsTyping(true);
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
+    const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || '';
     try {
-      const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || '';
       let res: Response | null = null;
       let backendFailed = false;
 
@@ -1965,46 +1965,34 @@ export default function App() {
           return;
         }
 
-        if (activeKey) {
-          console.info("[Deployment Mode] Running client-direct Gemini execution with personal API Key...");
-          const directResult = await callDirectGeminiChat({
-            messages: newMessages.map(m => ({ role: m.role, content: m.content })),
-            personality,
-            apiKey: activeKey,
-            userName: currentUser?.username || 'User',
-            isAdmin: currentUser?.email === 'sy5455977@gmail.com'
-          });
+        console.info("[Deployment Mode] Running client-direct Gemini/Autonomous execution...");
+        const directResult = await callDirectGeminiChat({
+          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+          personality,
+          apiKey: activeKey,
+          userName: currentUser?.username || 'User',
+          isAdmin: currentUser?.email === 'sy5455977@gmail.com'
+        });
 
-          const formattedContent = directResult.questions && directResult.questions.length > 0
-            ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
-            : directResult.text;
+        const formattedContent = directResult.questions && directResult.questions.length > 0
+          ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
+          : directResult.text;
 
-          const isBuildOrRebuild = currentText.toLowerCase().startsWith('/build') || currentText.toLowerCase().startsWith('/rebuild');
-          const finalMsg: Message = {
-            id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-            role: 'ai',
-            content: formattedContent,
-            winner: isBuildOrRebuild ? 'Blackbell 2.0 (Website Builder)' : 'Gemini (Direct Client Mode)',
-            latency: '0.4s'
-          };
+        const isBuildOrRebuild = currentText.toLowerCase().startsWith('/build') || currentText.toLowerCase().startsWith('/rebuild');
+        const finalMsg: Message = {
+          id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          role: 'ai',
+          content: formattedContent,
+          winner: isBuildOrRebuild ? 'Blackbell 2.0 (Website Builder)' : (activeKey ? 'Gemini 3.8 Flash (Direct Mode)' : 'Blackbell Autonomous Engine'),
+          latency: '0.3s'
+        };
 
-          updateActiveSessionMessages([...newMessages, finalMsg]);
-          if (autoSpeak) {
-            playMessageTTS(directResult.text, newMessages.length);
-          }
-          return;
-        } else {
-          const noKeyMsg: Message = {
-            id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-            role: 'ai',
-            content: "Netlify / Vercel static deployment par chat, voice aur `/build` commands run karne ke liye please upar header me 'Enter Gemini API Key' par tap karke apni free Google Gemini API Key add karein. Key direct browser me safe save hoti hai! 🔑\n\n[QUESTIONS]\n- Gemini API Key kaise create karein?\n- Kya ye key bilkul free hoti hai?\n- Key add karne ke baad /build kaise use karein?",
-            winner: 'Blackbell System',
-            latency: '0.00'
-          };
-          updateActiveSessionMessages([...newMessages, noKeyMsg]);
-          setIsTyping(false);
-          return;
+        updateActiveSessionMessages([...newMessages, finalMsg]);
+        if (autoSpeak) {
+          playMessageTTS(directResult.text, newMessages.length);
         }
+        setIsTyping(false);
+        return;
       }
 
       if (res && res.status === 401) {
@@ -2051,44 +2039,33 @@ export default function App() {
         const errText = res ? await res.text() : "Network error";
         console.warn(`[Backend /api/chat status ${res?.status}]: ${errText}. Running automatic client-direct multi-model fallback cascade...`);
         
-        if (activeKey) {
-          const directResult = await callDirectGeminiChat({
-            messages: newMessages.map(m => ({ role: m.role, content: m.content })),
-            personality,
-            apiKey: activeKey,
-            userName: currentUser?.username || 'User',
-            isAdmin: currentUser?.email === 'sy5455977@gmail.com'
-          });
+        const directResult = await callDirectGeminiChat({
+          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+          personality,
+          apiKey: activeKey,
+          userName: currentUser?.username || 'User',
+          isAdmin: currentUser?.email === 'sy5455977@gmail.com'
+        });
 
-          const formattedContent = directResult.questions && directResult.questions.length > 0
-            ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
-            : directResult.text;
+        const formattedContent = directResult.questions && directResult.questions.length > 0
+          ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
+          : directResult.text;
 
-          const isBuildOrRebuild = currentText.toLowerCase().startsWith('/build') || currentText.toLowerCase().startsWith('/rebuild');
-          const finalMsg: Message = {
-            id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-            role: 'ai',
-            content: formattedContent,
-            winner: isBuildOrRebuild ? 'Blackbell 2.0 (Website Builder)' : 'Gemini 2.5 Flash (Auto-Cascade)',
-            latency: '0.4s'
-          };
+        const isBuildOrRebuild = currentText.toLowerCase().startsWith('/build') || currentText.toLowerCase().startsWith('/rebuild');
+        const finalMsg: Message = {
+          id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          role: 'ai',
+          content: formattedContent,
+          winner: isBuildOrRebuild ? 'Blackbell 2.0 (Website Builder)' : (activeKey ? 'Gemini 3.8 Flash (Auto-Cascade)' : 'Blackbell Autonomous Engine'),
+          latency: '0.3s'
+        };
 
-          updateActiveSessionMessages([...newMessages, finalMsg]);
-          if (autoSpeak) {
-            playMessageTTS(directResult.text, newMessages.length);
-          }
-          return;
-        } else {
-          const politeMsg: Message = {
-            id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-            role: 'ai',
-            content: "Blackbell par abhi temporary heavy traffic hai. Fast response ke liye please top header me apni personal Google Gemini API Key add karein, ya 1 minute baad dubara try karein! ⚡\n\n[QUESTIONS]\n- Ek baar fir se try karein\n- Gemini API Key kaise banayein?\n- /build feature kaise use karein?",
-            winner: 'Blackbell Resilience Core',
-            latency: '0.00'
-          };
-          updateActiveSessionMessages([...newMessages, politeMsg]);
-          return;
+        updateActiveSessionMessages([...newMessages, finalMsg]);
+        if (autoSpeak) {
+          playMessageTTS(directResult.text, newMessages.length);
         }
+        setIsTyping(false);
+        return;
       }
 
       const winner = res.headers.get('x-model-winner') || '';
@@ -2101,79 +2078,33 @@ export default function App() {
 
       if (isHtmlResponse) {
         console.info("[Netlify/Vercel/Hostinger Static Deploy Detected] Executing client-direct AI engine...");
-        if (activeKey) {
-          const directResult = await callDirectGeminiChat({
-            messages: newMessages.map(m => ({ role: m.role, content: m.content })),
-            personality,
-            apiKey: activeKey,
-            userName: currentUser?.username || 'User',
-            isAdmin: currentUser?.email === 'sy5455977@gmail.com'
-          });
+        const directResult = await callDirectGeminiChat({
+          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+          personality,
+          apiKey: activeKey,
+          userName: currentUser?.username || 'User',
+          isAdmin: currentUser?.email === 'sy5455977@gmail.com'
+        });
 
-          const formattedContent = directResult.questions && directResult.questions.length > 0
-            ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
-            : directResult.text;
+        const formattedContent = directResult.questions && directResult.questions.length > 0
+          ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
+          : directResult.text;
 
-          const isBuildOrRebuild = currentText.toLowerCase().startsWith('/build') || currentText.toLowerCase().startsWith('/rebuild');
-          const finalMsg: Message = {
-            id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-            role: 'ai',
-            content: formattedContent,
-            winner: isBuildOrRebuild ? 'Blackbell 2.0 (Website Builder)' : 'Gemini 2.5 Flash (Static Deploy Mode)',
-            latency: '0.4s'
-          };
+        const isBuildOrRebuild = currentText.toLowerCase().startsWith('/build') || currentText.toLowerCase().startsWith('/rebuild');
+        const finalMsg: Message = {
+          id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          role: 'ai',
+          content: formattedContent,
+          winner: isBuildOrRebuild ? 'Blackbell 2.0 (Website Builder)' : (activeKey ? 'Gemini 3.8 Flash (Static Deploy Mode)' : 'Blackbell Autonomous Engine'),
+          latency: '0.3s'
+        };
 
-          updateActiveSessionMessages([...newMessages, finalMsg]);
-          if (autoSpeak) {
-            playMessageTTS(directResult.text, newMessages.length);
-          }
-          return;
-        } else {
-          try {
-            const pollRes = await fetch('https://text.pollinations.ai/', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                messages: [
-                  {
-                    role: 'system',
-                    content: personality === 'black'
-                      ? `You are BLACKBELL AI (Persona: Black). User jo poochhe, usi ka seedha, accurate aur professional answer do. Unnecessary flattery, greetings aur emotional chatting band karo. Answer first, explanation second. Structure with headings, bold terms, lists. Always end with [QUESTIONS] and 3 follow-ups.`
-                      : `You are BLACKBELL AI (Persona: Bell). User jo poochhe, usi ka seedha, accurate aur professional answer do. Unnecessary flattery, greetings aur emotional chatting band karo. Answer first, explanation second. Structure with headings, bold terms, lists. Always end with [QUESTIONS] and 3 follow-ups.`
-                  },
-                  ...newMessages.slice(-6).map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content }))
-                ]
-              })
-            });
-
-            if (pollRes.ok) {
-              const pollText = await pollRes.text();
-              if (pollText && !pollText.trim().startsWith('<!DOCTYPE') && !pollText.trim().startsWith('<html')) {
-                const finalMsg: Message = {
-                  id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-                  role: 'ai',
-                  content: pollText,
-                  winner: 'Blackbell (Static Keyless Engine)',
-                  latency: '0.5s'
-                };
-                updateActiveSessionMessages([...newMessages, finalMsg]);
-                return;
-              }
-            }
-          } catch (pollErr) {
-            console.warn("Keyless fallback execution error:", pollErr);
-          }
-
-          const noKeyMsg: Message = {
-            id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-            role: 'ai',
-            content: "Netlify / Vercel / Hostinger static deployment par chat, voice aur `/build` features active karne ke liye please top header mein 'API Key' par click karke apni free Google Gemini API Key add karein! Key browser mein secure save hoti hai. 🔑\n\n[QUESTIONS]\n- Gemini API Key kaise create karein?\n- Kya ye key bilkul free hoti hai?\n- Key add karne ke baad /build kaise use karein?",
-            winner: 'Blackbell System',
-            latency: '0.00'
-          };
-          updateActiveSessionMessages([...newMessages, noKeyMsg]);
-          return;
+        updateActiveSessionMessages([...newMessages, finalMsg]);
+        if (autoSpeak) {
+          playMessageTTS(directResult.text, newMessages.length);
         }
+        setIsTyping(false);
+        return;
       }
       const finalMsg: Message = { 
         id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -2196,8 +2127,29 @@ export default function App() {
         console.log("Fetch aborted by user.");
         return;
       }
-      const errorMsg = e?.message || "Error connecting to AI Server.";
-      updateActiveSessionMessages([...newMessages, { role: 'ai', content: `Error: ${errorMsg}. Please try again.` }]);
+      console.warn("handleSendMessage execution fallback engaged:", e);
+      try {
+        const directResult = await callDirectGeminiChat({
+          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+          personality,
+          apiKey: activeKey,
+          userName: currentUser?.username || 'User',
+          isAdmin: currentUser?.email === 'sy5455977@gmail.com'
+        });
+        const formattedContent = directResult.questions && directResult.questions.length > 0
+          ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
+          : directResult.text;
+        updateActiveSessionMessages([...newMessages, {
+          id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          role: 'ai',
+          content: formattedContent,
+          winner: 'Blackbell Autonomous Engine',
+          latency: '0.01s'
+        }]);
+      } catch (innerErr: any) {
+        const errorMsg = e?.message || "Temporary connection issue. Please try again.";
+        updateActiveSessionMessages([...newMessages, { role: 'ai', content: `Error: ${errorMsg}. Please try again.` }]);
+      }
     } finally {
       setIsTyping(false);
       abortControllerRef.current = null;

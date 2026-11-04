@@ -1888,6 +1888,11 @@ export default function App() {
     try {
       let res: Response | null = null;
       let backendFailed = false;
+      let isFastTimeout = false;
+      const chatTimeoutId = setTimeout(() => {
+        isFastTimeout = true;
+        abortController.abort();
+      }, 2800);
 
       try {
         res = await fetch('/api/chat', {
@@ -1920,10 +1925,18 @@ export default function App() {
             }))
           })
         });
+        clearTimeout(chatTimeoutId);
       } catch (networkErr: any) {
-        if (networkErr.name === 'AbortError') throw networkErr;
-        console.warn("[Vercel/Netlify Mode] Backend /api/chat unreachable, activating client-direct execution:", networkErr);
-        backendFailed = true;
+        clearTimeout(chatTimeoutId);
+        if (isFastTimeout) {
+          console.info("[3s Speed Guarantee] Backend response reached 2.8s cutoff. Delivering answer instantly via direct client engine.");
+          backendFailed = true;
+        } else if (networkErr.name === 'AbortError') {
+          throw networkErr;
+        } else {
+          console.warn("[Vercel/Netlify Mode] Backend /api/chat unreachable, activating client-direct execution:", networkErr);
+          backendFailed = true;
+        }
       }
 
       // If backend failed (e.g. 404 on Vercel/Netlify static host, or network failure)

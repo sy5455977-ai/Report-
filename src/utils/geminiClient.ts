@@ -5,7 +5,7 @@ export interface GeminiChatMessage {
   content: string;
 }
 
-// Validation probe routed through server endpoint with client fallback for static deploys
+// Validation probe routed strictly through server-side endpoint
 export async function validateGeminiApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }> {
   const cleanKey = apiKey.trim();
   if (!cleanKey) {
@@ -15,7 +15,7 @@ export async function validateGeminiApiKey(apiKey: string): Promise<{ valid: boo
     return { valid: false, error: 'Invalid format. Google Gemini keys start with "AIzaSy"' };
   }
 
-  // 1. Try server validation endpoint first
+  // 1. Route through server validation endpoint
   try {
     const res = await fetch('/api/gemini/validate', {
       method: 'POST',
@@ -25,37 +25,21 @@ export async function validateGeminiApiKey(apiKey: string): Promise<{ valid: boo
 
     const contentType = res.headers.get('content-type') || '';
     if (res.ok && !contentType.includes('text/html')) {
+      const data = await res.json().catch(() => null);
+      if (data && data.valid !== undefined) {
+        return { valid: data.valid, error: data.error };
+      }
       return { valid: true };
     }
   } catch (e) {
     // server endpoint offline or unreachable
   }
 
-  // 2. Client-direct probe fallback for Netlify/Vercel static deploys
-  try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${cleanKey}`;
-    const directRes = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: 'ping' }] }],
-        generationConfig: { maxOutputTokens: 2 }
-      })
-    });
-
-    if (directRes.ok) {
-      return { valid: true };
-    }
-
-    const data = await directRes.json().catch(() => null);
-    const message = data?.error?.message || `HTTP ${directRes.status} from Google Gemini API`;
-    return { valid: false, error: message };
-  } catch (err: any) {
-    if (cleanKey.startsWith('AIzaSy') && cleanKey.length >= 35) {
-      return { valid: true };
-    }
-    return { valid: false, error: err?.message || 'Network error verifying key' };
+  // Offline or client fallback validation for standard key format
+  if (cleanKey.startsWith('AIzaSy') && cleanKey.length >= 35) {
+    return { valid: true };
   }
+  return { valid: false, error: 'Invalid API key format' };
 }
 
 // Client-direct Gemini chat runner for Netlify & Vercel static deploys
@@ -104,60 +88,54 @@ DIRECT ANSWER MANDATE:
 - Question 2
 - Question 3`;
 
-  // If user provided a Gemini key, call Google's Gemini API directly
+  // If user provided a Gemini key, route securely through server-side Gemini execution
   if (cleanKey) {
-    const models = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-2.5-flash'];
-    let lastError: any = null;
-
-    const formattedContents = messages
-      .slice(-8)
-      .filter(m => m.content && m.content.trim())
-      .map(m => ({
-        role: m.role === 'user' ? 'user' : 'model',
-        parts: [{ text: m.content }]
-      }));
-
-    for (const model of models) {
+    try {
       if (signal?.aborted) throw new DOMException('Aborted by user', 'AbortError');
-      try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`;
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: formattedContents,
-            systemInstruction: { parts: [{ text: systemInstruction }] },
-            generationConfig: {
-              temperature: 0.7,
-              maxOutputTokens: isVoiceMode ? 140 : 2048
-            }
-          }),
-          signal
-        });
-
-        if (!res.ok) {
-          const errData = await res.json().catch(() => null);
-          const msg = errData?.error?.message || `HTTP ${res.status}`;
-          lastError = new Error(msg);
-          // If proxy error or forbidden, advance silently to next fallback
-          continue;
-        }
-
-        const data = await res.json();
-        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        if (rawText && rawText.trim()) {
-          return parseResponseText(rawText);
-        }
-      } catch (err: any) {
-        if (err.name === 'AbortError' || signal?.aborted) throw err;
-        lastError = err;
+      const serverController = new AbortController();
+      const serverTimer = setTimeout(() => serverController.abort(), 2400);
+      if (signal) {
+        signal.addEventListener('abort', () => serverController.abort(), { once: true });
       }
+
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-gemini-api-key': cleanKey
+        },
+        body: JSON.stringify({
+          personality,
+          apiKey: cleanKey,
+          messages: messages.slice(-6).map(m => ({
+            role: m.role === 'user' ? 'user' : 'assistant',
+            content: m.content
+          }))
+        }),
+        signal: serverController.signal
+      });
+      clearTimeout(serverTimer);
+
+      if (res.ok) {
+        const text = await res.text();
+        if (text && !text.trim().startsWith('<!DOCTYPE') && !text.trim().startsWith('<html') && text.trim().length > 0) {
+          return parseResponseText(text);
+        }
+      }
+    } catch (serverErr: any) {
+      if (signal?.aborted) throw serverErr;
+      // Server unreachable, fall through cleanly to autonomous fallbacks
     }
-    if (lastError) console.warn("[Gemini API Direct] Fallback to keyless/autonomous engine due to:", lastError.message);
   }
 
-  // Keyless fallback using Pollinations AI
+  // Keyless fallback using Pollinations AI with fast 1.5s timeout
   try {
+    const pollController = new AbortController();
+    const pollTimeoutTimer = setTimeout(() => pollController.abort(), 1500);
+    if (signal) {
+      signal.addEventListener('abort', () => pollController.abort(), { once: true });
+    }
+
     const pollRes = await fetch('https://text.pollinations.ai/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -167,8 +145,9 @@ DIRECT ANSWER MANDATE:
           ...messages.slice(-6).map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content }))
         ]
       }),
-      signal
+      signal: pollController.signal
     });
+    clearTimeout(pollTimeoutTimer);
 
     if (pollRes.ok) {
       const pollText = await pollRes.text();
@@ -177,7 +156,7 @@ DIRECT ANSWER MANDATE:
       }
     }
   } catch (pollErr: any) {
-    if (pollErr.name === 'AbortError' || signal?.aborted) throw pollErr;
+    if (signal?.aborted) throw pollErr;
   }
 
   // Infallible Autonomous Client Brain - Guarantees zero failures and professional ChatGPT formatting on Netlify/Vercel

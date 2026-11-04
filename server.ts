@@ -47,10 +47,10 @@ export function getRealTimeStatus(modelKey: "gemini" | "pollinations" | "blackbe
   return record.status as "Green" | "Red";
 }
 
-// Ultra-fast model cascade: Primary is Gemini 3.8 Flash, followed by Gemini 3.1 Flash Lite on rate limit exhaustion
+// Ultra-fast model cascade: Primary is Gemini 3.1 Flash Lite (ultra-low latency, <1.5s), followed by Gemini 3.8 Flash
 export const GEMINI_CASCADE_MODELS = [
-  { name: "Gemini 3.8 Flash", model: "gemini-3.8-flash" },
-  { name: "Gemini 3.1 Flash Lite", model: "gemini-3.1-flash-lite" }
+  { name: "Gemini 3.1 Flash Lite", model: "gemini-3.1-flash-lite" },
+  { name: "Gemini 3.8 Flash", model: "gemini-3.8-flash" }
 ];
 
 export const dailyModelTracker = {
@@ -1682,20 +1682,23 @@ At the very end of your response, ALWAYS output exactly 3 relevant, highly speci
       const runCascadingModels = async () => {
         const modelsList = getActiveCascadeModels();
         const errors: any[] = [];
+        // Keep input context to the most recent 6 messages for ultra-fast token processing
+        const recentMessages = sanitizedMessages.slice(-6);
         for (const task of modelsList) {
           const start = Date.now();
           try {
             const text = await generateWithKeyRotation(async (ai) => {
               const config: any = {
                 systemInstruction: systemInstruction,
-                temperature: 0.7
+                temperature: 0.7,
+                maxOutputTokens: 800
               };
               if (task.model === "gemini-3.1-flash-lite") {
                 config.thinkingConfig = { thinkingLevel: ThinkingLevel.MINIMAL };
               }
               const resp = await ai.models.generateContent({
                 model: task.model,
-                contents: sanitizedMessages,
+                contents: recentMessages,
                 config
               });
               const textStr = resp.text;
@@ -1703,7 +1706,7 @@ At the very end of your response, ALWAYS output exactly 3 relevant, highly speci
                 throw new Error(`Model ${task.model} returned an empty response.`);
               }
               return textStr;
-            }, 2, 12000, clientApiKey); // 12s timeout per attempt with clientApiKey priority
+            }, 1, 2000, clientApiKey); // 2s ultra-fast timeout per attempt for <3s answer guarantee
             const latency = ((Date.now() - start) / 1000).toFixed(2);
             
             // Mark Gemini as Green on success
@@ -1739,9 +1742,16 @@ At the very end of your response, ALWAYS output exactly 3 relevant, highly speci
 
       let result = null;
 
-      // 1. Primary execution: Cloud Gemini Cascade
+      // 1. Primary execution: Cloud Gemini Cascade with strict 2.2s cutoff
       try {
-        result = await runCascadingModels();
+        const cloudTask = runCascadingModels();
+        const hardTimeout = new Promise<null>((resolve) => 
+          setTimeout(() => {
+            console.log("[Fast Response Guarantee] Cloud generation reached 2.2s ceiling. Engaging autonomous engine instantly.");
+            resolve(null);
+          }, 2200)
+        );
+        result = await Promise.race([cloudTask, hardTimeout]);
       } catch (cascadeError) {
         console.warn("All Gemini cloud models exhausted/unavailable. Proceeding to autonomous local engine.");
       }
@@ -1908,6 +1918,78 @@ Instructions:
       } catch (innerErr) {
         res.status(500).send(`Server Error: ${error?.message || error || "Gemini backend failed."}`);
       }
+    }
+  });
+
+  // Server-Sent Events (SSE) Streaming Chat API using @google/genai generateContentStream
+  app.post('/api/chat/stream', async (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    try {
+      const rawMessages = req.body.messages || [];
+      const userEmail = req.body.email;
+      const personality = (req.body.personality === 'bell' ? 'bell' : 'black') as 'bell' | 'black';
+      const sessionToken = req.headers['x-session-token'] as string;
+
+      const clientApiKey = (req.body.apiKey || (req.headers['x-gemini-api-key'] as string) || '').trim();
+      if (clientApiKey && clientApiKey.length > 10) {
+        geminiManager.addKey(clientApiKey);
+      }
+
+      const db = readDB();
+      const user = userEmail ? db.users.find(u => u.email === userEmail.trim().toLowerCase()) : null;
+      if (userEmail && (!user || user.sessionToken !== sessionToken)) {
+        res.write(`data: ${JSON.stringify({ error: "Unauthorized Access. Invalid Session." })}\n\n`);
+        return res.end();
+      }
+
+      const lastUserMsg = [...rawMessages].reverse().find(m => m.role === 'user');
+      const userQuery = lastUserMsg ? lastUserMsg.content?.trim() : "Hello";
+
+      const recentMessages = rawMessages.slice(-6).map((m: any) => ({
+        role: m.role === 'user' ? 'user' : 'model',
+        parts: [{ text: m.content || '' }]
+      }));
+
+      let streamedText = "";
+      try {
+        const clientObj = geminiManager.getClient(clientApiKey);
+        const { client } = clientObj;
+
+        const responseStream = await client.models.generateContentStream({
+          model: "gemini-3.1-flash-lite",
+          contents: recentMessages,
+          config: {
+            systemInstruction: personality === 'black' 
+              ? "You are BLACKBELL AI. Provide direct, authoritative, structured answers in Hindi/English with 3 follow-up questions at the end under [QUESTIONS]."
+              : "You are BLACKBELL AI. Provide bright, engaging, professional answers in Hindi/English with 3 follow-up questions at the end under [QUESTIONS].",
+            temperature: 0.7,
+            maxOutputTokens: 800,
+            thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL }
+          }
+        });
+
+        for await (const chunk of responseStream) {
+          if (chunk.text) {
+            streamedText += chunk.text;
+            res.write(`data: ${JSON.stringify({ chunk: chunk.text })}\n\n`);
+          }
+        }
+      } catch (geminiErr) {
+        console.warn("[Stream API] Gemini stream error, streaming autonomous brain fallback:", geminiErr);
+        if (!streamedText) {
+          const fallbackText = generateBlackbell2Response(userQuery, rawMessages, "User", []);
+          res.write(`data: ${JSON.stringify({ chunk: fallbackText })}\n\n`);
+        }
+      }
+
+      res.write("data: [DONE]\n\n");
+      res.end();
+    } catch (e: any) {
+      res.write(`data: ${JSON.stringify({ error: e?.message || "Stream error" })}\n\n`);
+      res.end();
     }
   });
 

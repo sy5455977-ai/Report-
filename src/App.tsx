@@ -722,6 +722,12 @@ export default function App() {
         body: JSON.stringify({ email, password: savedPassword })
       });
 
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('text/html') || res.status === 404) {
+        // Static host on Netlify / Vercel detected (returned HTML or 404)
+        return true;
+      }
+
       // Strict ban enforcement: if 403, user is permanently banned!
       if (res.status === 403) {
         handleLogout();
@@ -737,9 +743,10 @@ export default function App() {
         });
       }
 
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && data.user) {
+      const resContentType = res.headers.get('content-type') || '';
+      if (res.ok && resContentType.includes('application/json')) {
+        const data = await res.json().catch(() => null);
+        if (data && data.success && data.user) {
           setCurrentUser(data.user);
           localStorage.setItem('blackbell_user', JSON.stringify(data.user));
           
@@ -1437,34 +1444,27 @@ export default function App() {
       nextStartTimeRef.current = outputCtx.currentTime;
 
       let success = false;
-      const isStaticDeploy = typeof window !== 'undefined' && (
-        window.location.hostname.endsWith('netlify.app') ||
-        window.location.hostname.endsWith('vercel.app') ||
-        window.location.hostname.includes('hostinger')
-      );
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+      }, 3000);
 
-      // On full-stack servers, use backend TTS endpoint; on Netlify/Vercel static hosts, bypass immediately
-      if (!isStaticDeploy) {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => {
-          controller.abort();
-        }, 3000);
-
-        try {
-          const response = await fetch('/api/tts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              text, 
-              voice: personality === 'black' ? 'Charon' : 'Aoede',
-              personality
-            }),
-            signal: controller.signal
-          });
-          clearTimeout(timeoutId);
-          if (response.ok) {
-            const data = await response.json();
-            if (data.audio) {
+      try {
+        const response = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            text, 
+            voice: personality === 'black' ? 'Charon' : 'Aoede',
+            personality
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        const contentType = response.headers.get('content-type') || '';
+        if (response.ok && contentType.includes('application/json')) {
+          const data = await response.json().catch(() => null);
+          if (data && data.audio) {
               if (data.format === 'wav' || data.audio.startsWith('UklGR')) {
                 try {
                   const audio = new Audio(`data:audio/wav;base64,${data.audio}`);
@@ -1499,7 +1499,6 @@ export default function App() {
         } catch (err) {
           // Fall through smoothly to direct Gemini TTS
         }
-      }
 
       if (!success) {
         const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || (typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : '') || '';
@@ -1884,15 +1883,10 @@ export default function App() {
     setIsTyping(true);
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
-    const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || '';
     try {
+      const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || '';
       let res: Response | null = null;
       let backendFailed = false;
-      let isFastTimeout = false;
-      const chatTimeoutId = setTimeout(() => {
-        isFastTimeout = true;
-        abortController.abort();
-      }, 2800);
 
       try {
         res = await fetch('/api/chat', {
@@ -1925,18 +1919,15 @@ export default function App() {
             }))
           })
         });
-        clearTimeout(chatTimeoutId);
-      } catch (networkErr: any) {
-        clearTimeout(chatTimeoutId);
-        if (isFastTimeout) {
-          console.info("[3s Speed Guarantee] Backend response reached 2.8s cutoff. Delivering answer instantly via direct client engine.");
-          backendFailed = true;
-        } else if (networkErr.name === 'AbortError') {
-          throw networkErr;
-        } else {
-          console.warn("[Vercel/Netlify Mode] Backend /api/chat unreachable, activating client-direct execution:", networkErr);
+
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('text/html') || res.status === 404) {
           backendFailed = true;
         }
+      } catch (networkErr: any) {
+        if (networkErr.name === 'AbortError') throw networkErr;
+        console.warn("[Vercel/Netlify Mode] Backend /api/chat unreachable, activating client-direct execution:", networkErr);
+        backendFailed = true;
       }
 
       // If backend failed (e.g. 404 on Vercel/Netlify static host, or network failure)
@@ -1978,34 +1969,46 @@ export default function App() {
           return;
         }
 
-        console.info("[Deployment Mode] Running client-direct Gemini/Autonomous execution...");
-        const directResult = await callDirectGeminiChat({
-          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
-          personality,
-          apiKey: activeKey,
-          userName: currentUser?.username || 'User',
-          isAdmin: currentUser?.email === 'sy5455977@gmail.com'
-        });
+        if (activeKey) {
+          console.info("[Deployment Mode] Running client-direct Gemini execution with personal API Key...");
+          const directResult = await callDirectGeminiChat({
+            messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+            personality,
+            apiKey: activeKey,
+            userName: currentUser?.username || 'User',
+            isAdmin: currentUser?.email === 'sy5455977@gmail.com'
+          });
 
-        const formattedContent = directResult.questions && directResult.questions.length > 0
-          ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
-          : directResult.text;
+          const formattedContent = directResult.questions && directResult.questions.length > 0
+            ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
+            : directResult.text;
 
-        const isBuildOrRebuild = currentText.toLowerCase().startsWith('/build') || currentText.toLowerCase().startsWith('/rebuild');
-        const finalMsg: Message = {
-          id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          role: 'ai',
-          content: formattedContent,
-          winner: isBuildOrRebuild ? 'Blackbell 2.0 (Website Builder)' : (activeKey ? 'Gemini 3.8 Flash (Direct Mode)' : 'Blackbell Autonomous Engine'),
-          latency: '0.3s'
-        };
+          const isBuildOrRebuild = currentText.toLowerCase().startsWith('/build') || currentText.toLowerCase().startsWith('/rebuild');
+          const finalMsg: Message = {
+            id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            role: 'ai',
+            content: formattedContent,
+            winner: isBuildOrRebuild ? 'Blackbell 2.0 (Website Builder)' : 'Gemini (Direct Client Mode)',
+            latency: '0.4s'
+          };
 
-        updateActiveSessionMessages([...newMessages, finalMsg]);
-        if (autoSpeak) {
-          playMessageTTS(directResult.text, newMessages.length);
+          updateActiveSessionMessages([...newMessages, finalMsg]);
+          if (autoSpeak) {
+            playMessageTTS(directResult.text, newMessages.length);
+          }
+          return;
+        } else {
+          const noKeyMsg: Message = {
+            id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            role: 'ai',
+            content: "Netlify / Vercel static deployment par chat, voice aur `/build` commands run karne ke liye please upar header me 'Enter Gemini API Key' par tap karke apni free Google Gemini API Key add karein. Key direct browser me safe save hoti hai! 🔑\n\n[QUESTIONS]\n- Gemini API Key kaise create karein?\n- Kya ye key bilkul free hoti hai?\n- Key add karne ke baad /build kaise use karein?",
+            winner: 'Blackbell System',
+            latency: '0.00'
+          };
+          updateActiveSessionMessages([...newMessages, noKeyMsg]);
+          setIsTyping(false);
+          return;
         }
-        setIsTyping(false);
-        return;
       }
 
       if (res && res.status === 401) {
@@ -2052,73 +2055,50 @@ export default function App() {
         const errText = res ? await res.text() : "Network error";
         console.warn(`[Backend /api/chat status ${res?.status}]: ${errText}. Running automatic client-direct multi-model fallback cascade...`);
         
-        const directResult = await callDirectGeminiChat({
-          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
-          personality,
-          apiKey: activeKey,
-          userName: currentUser?.username || 'User',
-          isAdmin: currentUser?.email === 'sy5455977@gmail.com'
-        });
+        if (activeKey) {
+          const directResult = await callDirectGeminiChat({
+            messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+            personality,
+            apiKey: activeKey,
+            userName: currentUser?.username || 'User',
+            isAdmin: currentUser?.email === 'sy5455977@gmail.com'
+          });
 
-        const formattedContent = directResult.questions && directResult.questions.length > 0
-          ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
-          : directResult.text;
+          const formattedContent = directResult.questions && directResult.questions.length > 0
+            ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
+            : directResult.text;
 
-        const isBuildOrRebuild = currentText.toLowerCase().startsWith('/build') || currentText.toLowerCase().startsWith('/rebuild');
-        const finalMsg: Message = {
-          id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          role: 'ai',
-          content: formattedContent,
-          winner: isBuildOrRebuild ? 'Blackbell 2.0 (Website Builder)' : (activeKey ? 'Gemini 3.8 Flash (Auto-Cascade)' : 'Blackbell Autonomous Engine'),
-          latency: '0.3s'
-        };
+          const isBuildOrRebuild = currentText.toLowerCase().startsWith('/build') || currentText.toLowerCase().startsWith('/rebuild');
+          const finalMsg: Message = {
+            id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            role: 'ai',
+            content: formattedContent,
+            winner: isBuildOrRebuild ? 'Blackbell 2.0 (Website Builder)' : 'Gemini 2.5 Flash (Auto-Cascade)',
+            latency: '0.4s'
+          };
 
-        updateActiveSessionMessages([...newMessages, finalMsg]);
-        if (autoSpeak) {
-          playMessageTTS(directResult.text, newMessages.length);
+          updateActiveSessionMessages([...newMessages, finalMsg]);
+          if (autoSpeak) {
+            playMessageTTS(directResult.text, newMessages.length);
+          }
+          return;
+        } else {
+          const politeMsg: Message = {
+            id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            role: 'ai',
+            content: "Blackbell par abhi temporary heavy traffic hai. Fast response ke liye please top header me apni personal Google Gemini API Key add karein, ya 1 minute baad dubara try karein! ⚡\n\n[QUESTIONS]\n- Ek baar fir se try karein\n- Gemini API Key kaise banayein?\n- /build feature kaise use karein?",
+            winner: 'Blackbell Resilience Core',
+            latency: '0.00'
+          };
+          updateActiveSessionMessages([...newMessages, politeMsg]);
+          return;
         }
-        setIsTyping(false);
-        return;
       }
 
       const winner = res.headers.get('x-model-winner') || '';
       const latency = res.headers.get('x-model-latency') || '';
       const isResponseImage = res.headers.get('x-is-image') === 'true';
       const aiText = await res.text();
-
-      const contentType = res.headers.get('content-type') || '';
-      const isHtmlResponse = contentType.includes('text/html') || aiText.trim().startsWith('<!DOCTYPE') || aiText.trim().startsWith('<html');
-
-      if (isHtmlResponse) {
-        console.info("[Netlify/Vercel/Hostinger Static Deploy Detected] Executing client-direct AI engine...");
-        const directResult = await callDirectGeminiChat({
-          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
-          personality,
-          apiKey: activeKey,
-          userName: currentUser?.username || 'User',
-          isAdmin: currentUser?.email === 'sy5455977@gmail.com'
-        });
-
-        const formattedContent = directResult.questions && directResult.questions.length > 0
-          ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
-          : directResult.text;
-
-        const isBuildOrRebuild = currentText.toLowerCase().startsWith('/build') || currentText.toLowerCase().startsWith('/rebuild');
-        const finalMsg: Message = {
-          id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          role: 'ai',
-          content: formattedContent,
-          winner: isBuildOrRebuild ? 'Blackbell 2.0 (Website Builder)' : (activeKey ? 'Gemini 3.8 Flash (Static Deploy Mode)' : 'Blackbell Autonomous Engine'),
-          latency: '0.3s'
-        };
-
-        updateActiveSessionMessages([...newMessages, finalMsg]);
-        if (autoSpeak) {
-          playMessageTTS(directResult.text, newMessages.length);
-        }
-        setIsTyping(false);
-        return;
-      }
       const finalMsg: Message = { 
         id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         role: 'ai', 
@@ -2140,29 +2120,8 @@ export default function App() {
         console.log("Fetch aborted by user.");
         return;
       }
-      console.warn("handleSendMessage execution fallback engaged:", e);
-      try {
-        const directResult = await callDirectGeminiChat({
-          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
-          personality,
-          apiKey: activeKey,
-          userName: currentUser?.username || 'User',
-          isAdmin: currentUser?.email === 'sy5455977@gmail.com'
-        });
-        const formattedContent = directResult.questions && directResult.questions.length > 0
-          ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
-          : directResult.text;
-        updateActiveSessionMessages([...newMessages, {
-          id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          role: 'ai',
-          content: formattedContent,
-          winner: 'Blackbell Autonomous Engine',
-          latency: '0.01s'
-        }]);
-      } catch (innerErr: any) {
-        const errorMsg = e?.message || "Temporary connection issue. Please try again.";
-        updateActiveSessionMessages([...newMessages, { role: 'ai', content: `Error: ${errorMsg}. Please try again.` }]);
-      }
+      const errorMsg = e?.message || "Error connecting to AI Server.";
+      updateActiveSessionMessages([...newMessages, { role: 'ai', content: `Error: ${errorMsg}. Please try again.` }]);
     } finally {
       setIsTyping(false);
       abortControllerRef.current = null;

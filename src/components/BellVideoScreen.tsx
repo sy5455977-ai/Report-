@@ -193,8 +193,10 @@ export function BellVideoScreen({
 
       try {
         const res = await fetch(`/api/bell-video/status?t=${Date.now()}`);
-        if (res.ok) {
-          const data = await res.json();
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          const data = await res.json().catch(() => null);
+          if (!data) return;
 
           if (Array.isArray(data.talkingUrls) && data.talkingUrls.length > 0) {
             data.talkingUrls.forEach((u: string, idx: number) => {

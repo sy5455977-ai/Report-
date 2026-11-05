@@ -73,6 +73,88 @@ Coverage aur speed requirements ke anusaar alag-alag network types aur connectio
     ]
   },
   {
+    keywords: ['characteristic', 'advantage', 'disadvantage', 'faayde', 'nuksan', 'features of internet'],
+    response: () => `Internet ke characteristics, advantages aur disadvantages ka vishleshan:
+
+1. Characteristics (Mukhya Visheshtayein):
+- Global Reach: Duniya ke kisi bhi kone se devices aur users ko jodta hai.
+- Decentralized Network: Kisi ek company ya vyakti ka poora control nahi hai.
+- Packet Switching: Data chhote packets mein divide hokar alag-alag routes se travel karta hai.
+- TCP/IP Protocol: Sabhi devices ek universal language aur rules ke tehat communicate karte hain.
+
+2. Advantages (Mukhya Faayde):
+- Instant Communication: Email, WhatsApp aur video calling se real-time connection.
+- Unlimited Knowledge: Kisi bhi topic par study material, research aur courses available.
+- E-Commerce & Banking: Ghar baithe shopping, tickets booking aur UPI payment transfer.
+- Remote Work: Work from home aur global collaboration bina physical presence ke sambhav.
+
+3. Disadvantages (Mukhya Nuksan / Chunautiyan):
+- Cyber Security Risks: Phishing attacks, malware aur personal data theft ka khatra.
+- Addiction & Time Wastage: Social media aur endless scrolling se mental health aur focus par asar.
+- Fake News & Misinformation: Bina verify kiye afwahein tezi se phailna.
+- Digital Divide: Har jagah high-speed internet na milne se asamaan avsar.`,
+    questions: [
+      "Internet par data privacy aur personal safety kaise maintain karein?",
+      "Phishing attacks aur online fraud se bachne ke tips kya hain?",
+      "Internet aur WWW mein basic difference kya hai?"
+    ]
+  },
+  {
+    keywords: ['practical examples', 'real-world', 'real world', 'examples aur', 'udaharan'],
+    response: () => `Internet ke practical examples aur real-world daily uses:
+
+1. Communication:
+- Real-time video conferencing (Zoom, Google Meet)
+- Instant messaging aur email (WhatsApp, Gmail, Telegram)
+
+2. Digital Payments & Financial Services:
+- UPI transactions (PhonePe, Google Pay, Paytm)
+- Net banking, stock trading apps (Zerodha, Groww)
+
+3. E-Commerce & Home Delivery:
+- Online shopping (Amazon, Flipkart)
+- Food aur grocery delivery (Swiggy, Zomato, Blinkit)
+
+4. Healthcare & Telemedicine:
+- Online doctor consultation (Practo, Apollo 24/7)
+- Digital lab test reports aur patient history tracking
+
+5. Education & Skill Building:
+- Online live classes, YouTube tutorials, Khan Academy, Coursera
+
+6. Navigation & Transport:
+- GPS mapping aur live traffic (Google Maps)
+- Cab booking services (Uber, Ola)`,
+    questions: [
+      "Telemedicine aur online healthcare internet par kaise kaam karti hai?",
+      "UPI payment gateway ka architecture kya hai?",
+      "E-commerce mein recommendation systems kaise kaam karte hain?"
+    ]
+  },
+  {
+    keywords: ['internet aur www', 'difference between internet and www', 'www aur internet'],
+    response: () => `Internet aur WWW (World Wide Web) mein mukhya difference:
+
+1. Internet (The Infrastructure):
+- Yeh physical hardware aur networking infrastructure hai (cables, routers, satellites, servers).
+- Yeh networks ka network hai jo devices ko aapas mein jodta hai.
+- Iska aavishkar 1960s mein ARPANET ke roop mein hua tha.
+
+2. WWW (The Service / Information System):
+- Yeh ek service hai jo Internet ke upar run hoti hai.
+- Yeh web pages, websites aur documents ka collection hai jo hyperlinks aur URLs ke zariye accessible hain.
+- Iska aavishkar Tim Berners-Lee ne 1989 mein kiya tha.
+- HTTP aur HTTPS protocols ka upyog karta hai.
+
+Simple Analogy:
+Internet ek highway network (sadak) hai, jabki WWW us highway par chalne wali gaadiyan (traffic) hain.`,
+    questions: [
+      "Tim Berners-Lee ne WWW kab aur kyu banaya tha?",
+      "HTTP aur HTTPS mein security ke point of view se kya farak hai?",
+      "DNS (Domain Name System) kaise kaam karta hai?"
+    ]
+  },
+  {
     keywords: ['internet kya', 'what is internet', 'internet define', 'internet explain'],
     response: () => `Internet ek global computer network hai jo duniya bhar ke billions computers, servers aur smart devices ko standardized communication protocols (TCP/IP) ke madhyam se aapas mein connect karta hai.
 

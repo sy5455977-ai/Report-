@@ -41,15 +41,12 @@ export function AdminVideoSettings() {
     setIsLoadingStatus(true);
     try {
       const res = await fetch(`/api/bell-video/status?t=${Date.now()}`);
-      const contentType = res.headers.get('content-type') || '';
-      if (res.ok && contentType.includes('application/json')) {
-        const data = await res.json().catch(() => null);
-        if (data) {
-          setBellTalkingUrls(Array.isArray(data.talkingUrls) ? data.talkingUrls : []);
-          setBellSunnaUrls(Array.isArray(data.sunnaUrls) ? data.sunnaUrls : []);
-          setBlackTalkingUrls(Array.isArray(data.blackTalkingUrls) ? data.blackTalkingUrls : []);
-          setBlackSunnaUrls(Array.isArray(data.blackSunnaUrls) ? data.blackSunnaUrls : []);
-        }
+      if (res.ok) {
+        const data = await res.json();
+        setBellTalkingUrls(Array.isArray(data.talkingUrls) ? data.talkingUrls : []);
+        setBellSunnaUrls(Array.isArray(data.sunnaUrls) ? data.sunnaUrls : []);
+        setBlackTalkingUrls(Array.isArray(data.blackTalkingUrls) ? data.blackTalkingUrls : []);
+        setBlackSunnaUrls(Array.isArray(data.blackSunnaUrls) ? data.blackSunnaUrls : []);
       }
     } catch (err: any) {
       console.warn("Error fetching video status:", err);

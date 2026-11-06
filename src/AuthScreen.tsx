@@ -83,21 +83,6 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
 
       let serverSuccess = false;
       let userData: any = null;
-      let serverHandled = false;
-
-      // Check if user is locally recorded as banned
-      try {
-        const savedUsersRaw = localStorage.getItem('blackbell_registered_users');
-        if (savedUsersRaw) {
-          const userList = JSON.parse(savedUsersRaw);
-          const found = userList.find((u: any) => u.email?.toLowerCase() === email.trim().toLowerCase());
-          if (found && found.isBanned) {
-            setError("Your account has been banned. Please contact the administrator.");
-            setLoading(false);
-            return;
-          }
-        }
-      } catch (e) {}
 
       try {
         const res = await fetch(endpoint, {
@@ -106,102 +91,36 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
           body: JSON.stringify(body),
         });
 
-        serverHandled = true;
-
-        const contentType = res.headers.get('content-type') || '';
-        const isJson = contentType.includes('application/json');
-
-        if (res.ok && isJson) {
-          const data = await res.json().catch(() => null);
-          if (data && data.success && data.user) {
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.user) {
             serverSuccess = true;
-            userData = { ...data.user, apiKey: trimmedApiKey, password };
+            userData = { ...data.user, apiKey: trimmedApiKey };
           }
-        } else if (isJson && (res.status === 400 || res.status === 401 || res.status === 403)) {
-          // Server returned explicit JSON error (e.g. 403 Banned, 400 Incorrect Password)
-          const errText = await res.text().catch(() => '');
-          let cleanErr = "Authentication failed. Please verify your credentials.";
-          try {
-            const parsed = JSON.parse(errText);
-            cleanErr = parsed.error || parsed.message || cleanErr;
-          } catch (e) {
-            if (errText && !errText.trim().startsWith('<')) {
-              cleanErr = errText;
-            }
-          }
-          setError(cleanErr);
-          setLoading(false);
-          return;
-        } else {
-          // Netlify / Vercel static hosting deployment detected (returned HTML index.html or 404 page)
-          console.info("[Deployment Notice] Server auth route returned HTML/404 on static deployment. Activating client-side session for Vercel/Netlify.");
         }
       } catch (networkErr) {
         // Backend offline / Vercel or Netlify static hosting deployment detected!
-        console.info("[Deployment Notice] Server auth route unreachable. Activating client-side session for Vercel/Netlify:", networkErr);
+        console.info("[Deployment Notice] Server auth route unreachable. Activating seamless client-side local session for Vercel/Netlify:", networkErr);
       }
 
-      // If server responded with an error, we already returned. If server succeeded, use userData.
-      // Otherwise, only for offline/static deployment:
-      const activeUserRecord = (serverSuccess && userData) ? userData : {
+      // If server responded successfully, use server user data
+      if (serverSuccess && userData) {
+        onLogin(userData);
+        return;
+      }
+
+      // If on Vercel/Netlify static host (or backend unavailable), authenticate client-side directly!
+      const fallbackUsername = username || email.split('@')[0] || 'User';
+      const fallbackUser = {
         email: email.trim().toLowerCase(),
-        username: username || email.split('@')[0] || 'User',
+        username: fallbackUsername,
         isAdmin: email.trim().toLowerCase() === 'sy5455977@gmail.com',
         apiKey: trimmedApiKey,
-        password: password,
         sessionToken: `local_session_${Date.now()}_${Math.random().toString(36).substring(2)}`
       };
 
-      try {
-        const savedUsersRaw = localStorage.getItem('blackbell_registered_users');
-        let userList = savedUsersRaw ? JSON.parse(savedUsersRaw) : [];
-        if (!Array.isArray(userList)) userList = [];
-
-        // Ensure default admin is present
-        if (!userList.some((u: any) => u.email === 'sy5455977@gmail.com')) {
-          userList.unshift({
-            id: 'admin_sys',
-            email: 'sy5455977@gmail.com',
-            username: 'Blackbell Admin',
-            isAdmin: true,
-            isBanned: false,
-            password: 'Sachin6264341093',
-            createdAt: Date.now() - 86400000 * 7,
-            lastSeen: Date.now(),
-            role: 'admin',
-            messagesCount: 24,
-            sessionsCount: 3
-          });
-        }
-
-        const idx = userList.findIndex((u: any) => u.email.toLowerCase() === activeUserRecord.email.toLowerCase());
-        const userObj = {
-          id: activeUserRecord.id || `user_${Date.now()}`,
-          email: activeUserRecord.email,
-          username: activeUserRecord.username,
-          isAdmin: activeUserRecord.isAdmin,
-          isBanned: false,
-          password: password,
-          createdAt: activeUserRecord.createdAt || Date.now(),
-          lastSeen: Date.now(),
-          role: activeUserRecord.isAdmin ? 'admin' : 'user',
-          messagesCount: 1,
-          sessionsCount: 1
-        };
-
-        if (idx >= 0) {
-          userList[idx] = { ...userList[idx], password: password || userList[idx].password, lastSeen: Date.now() };
-        } else {
-          userList.push(userObj);
-        }
-        localStorage.setItem('blackbell_registered_users', JSON.stringify(userList));
-      } catch (e) {
-        console.warn("Could not cache registered user in localStorage:", e);
-      }
-
-      localStorage.setItem('blackbell_user', JSON.stringify(activeUserRecord));
-      onLogin(activeUserRecord);
-      return;
+      localStorage.setItem('blackbell_user', JSON.stringify(fallbackUser));
+      onLogin(fallbackUser);
 
     } catch (err: any) {
       console.error(err);

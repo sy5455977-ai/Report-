@@ -51,12 +51,9 @@ export const SearchKnowledgeModal: React.FC<SearchKnowledgeModalProps> = ({
   const fetchTrendingList = async () => {
     try {
       const res = await fetch('/api/knowledge/trending-list');
-      const contentType = res.headers.get('content-type') || '';
-      if (res.ok && contentType.includes('application/json')) {
-        const data = await res.json().catch(() => null);
-        if (data && data.success && Array.isArray(data.items)) {
-          setTrendingList(data.items);
-        }
+      const data = await res.json();
+      if (data.success && Array.isArray(data.items)) {
+        setTrendingList(data.items);
       }
     } catch (e) {
       console.warn("Failed to load trending list:", e);
@@ -68,15 +65,10 @@ export const SearchKnowledgeModal: React.FC<SearchKnowledgeModalProps> = ({
     setSyncStatusMsg('Fetching latest Google trends...');
     try {
       const res = await fetch('/api/knowledge/sync-trending', { method: 'POST' });
-      const contentType = res.headers.get('content-type') || '';
-      if (res.ok && contentType.includes('application/json')) {
-        const data = await res.json().catch(() => null);
-        if (data && data.success) {
-          setSyncStatusMsg(`Synced ${data.addedCount} new topics!`);
-          fetchTrendingList();
-        } else {
-          setSyncStatusMsg('Sync complete.');
-        }
+      const data = await res.json();
+      if (data.success) {
+        setSyncStatusMsg(`Synced ${data.addedCount} new topics to SQLite!`);
+        fetchTrendingList();
       } else {
         setSyncStatusMsg('Sync complete.');
       }
@@ -94,7 +86,7 @@ export const SearchKnowledgeModal: React.FC<SearchKnowledgeModalProps> = ({
 
     setIsLoading(true);
     setResult(null);
-    setActiveStep('1. Querying Knowledge Base...');
+    setActiveStep('1. Querying SQLite Local Knowledge Base...');
 
     try {
       setTimeout(() => {
@@ -111,13 +103,12 @@ export const SearchKnowledgeModal: React.FC<SearchKnowledgeModalProps> = ({
         body: JSON.stringify({ query: q, email: userEmail })
       });
 
-      const contentType = res.headers.get('content-type') || '';
-      if (res.ok && contentType.includes('application/json')) {
-        const data: CrossSearchResult = await res.json();
-        setResult(data);
-      } else {
-        throw new Error(`Endpoint returned non-JSON response (${res.status})`);
+      if (!res.ok) {
+        throw new Error(`HTTP Error ${res.status}`);
       }
+
+      const data: CrossSearchResult = await res.json();
+      setResult(data);
     } catch (err: any) {
       console.error("Search failed:", err);
       setResult({

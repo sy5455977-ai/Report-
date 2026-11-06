@@ -47,10 +47,10 @@ export function getRealTimeStatus(modelKey: "gemini" | "pollinations" | "blackbe
   return record.status as "Green" | "Red";
 }
 
-// Ultra-fast model cascade: Primary is Gemini 3.1 Flash Lite (ultra-low latency, <1.5s), followed by Gemini 3.8 Flash
+// Ultra-fast model cascade: Primary is Gemini 2.5 Flash, followed by Gemini 3.1 Flash on rate limit exhaustion
 export const GEMINI_CASCADE_MODELS = [
-  { name: "Gemini 3.1 Flash Lite", model: "gemini-3.1-flash-lite" },
-  { name: "Gemini 3.8 Flash", model: "gemini-3.8-flash" }
+  { name: "Gemini 2.5 Flash", model: "gemini-2.5-flash" },
+  { name: "Gemini 3.1 Flash", model: "gemini-3.1-flash-lite" }
 ];
 
 export const dailyModelTracker = {
@@ -130,15 +130,6 @@ class GeminiKeyManager {
     return this.keys;
   }
 
-  public addKey(key?: string) {
-    if (!key) return;
-    const trimmed = key.trim();
-    if (trimmed && trimmed !== "MY_GEMINI_API_KEY" && trimmed.length > 10 && !this.keys.includes(trimmed)) {
-      this.keys.unshift(trimmed);
-      console.log(`[Gemini Key Manager] Dynamically registered key: ${trimmed.substring(0, 6)}...`);
-    }
-  }
-
   public getAvailableKey(): string {
     this.refreshKeys();
     if (this.keys.length === 0) {
@@ -216,12 +207,8 @@ export function getGeminiClient(): GoogleGenAI {
 export async function generateWithKeyRotation<T>(
   fn: (ai: GoogleGenAI, key: string) => Promise<T>,
   maxAttempts = 3,
-  perAttemptTimeoutMs?: number,
-  overrideKey?: string
+  perAttemptTimeoutMs?: number
 ): Promise<T> {
-  if (overrideKey && overrideKey.trim().length > 10) {
-    geminiManager.addKey(overrideKey.trim());
-  }
   const totalKeys = geminiManager.getTotalKeysCount();
   const attempts = totalKeys > 1 ? Math.min(totalKeys, maxAttempts) : 1;
   let lastError: any = null;
@@ -229,7 +216,7 @@ export async function generateWithKeyRotation<T>(
   for (let attempt = 0; attempt < attempts; attempt++) {
     let clientObj;
     try {
-      clientObj = geminiManager.getClient(overrideKey);
+      clientObj = geminiManager.getClient();
     } catch (e: any) {
       lastError = e;
       break;
@@ -756,38 +743,6 @@ async function startServer() {
     }
   });
 
-  app.post('/api/gemini/validate', async (req, res) => {
-    try {
-      const { apiKey } = req.body;
-      const keyToTest = (apiKey || process.env.GEMINI_API_KEY || '').trim();
-      if (!keyToTest) {
-        return res.status(400).json({ valid: false, error: "API Key is required." });
-      }
-
-      const tempAi = new GoogleGenAI({
-        apiKey: keyToTest,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build'
-          }
-        }
-      });
-
-      const response = await tempAi.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: "ping"
-      });
-
-      if (response && response.text) {
-        return res.json({ valid: true });
-      }
-      return res.json({ valid: true });
-    } catch (err: any) {
-      console.warn("[Gemini Key Validate] Server-side validation failed:", err?.message);
-      return res.status(400).json({ valid: false, error: err?.message || "Invalid API key or network error." });
-    }
-  });
-
   app.post('/api/tts', async (req, res) => {
     try {
       const { text, voice, personality } = req.body;
@@ -1079,11 +1034,6 @@ async function startServer() {
 
       if (!userEmail) {
         return res.status(400).send("Email is required.");
-      }
-
-      const clientApiKey = (req.body.apiKey || (req.headers['x-gemini-api-key'] as string) || '').trim();
-      if (clientApiKey && clientApiKey.length > 10) {
-        geminiManager.addKey(clientApiKey);
       }
 
       const db = readDB();
@@ -1549,8 +1499,14 @@ async function startServer() {
 
       const userMemories = userEmail ? getUserMemories(userEmail) : [];
       let memoriesContext = "";
-      if (userMemories.length > 0) {
-        memoriesContext = `\nUser preferences/facts: [${userMemories.join(", ")}]. Respectfully adapt explanations based on these preferences without unprompted flattery.`;
+      if (isAdminUser) {
+        memoriesContext = userMemories.length > 0
+          ? `\nYou remember these facts/preferences about the administrator: [${userMemories.join(", ")}]. Naturally personalize your Hinglish flirty/charming conversation style using this learned memory profile.`
+          : `\nYou don't have past memories logged for this administrator yet. Carefully observe their style, name, or interest during chat to update memories.`;
+      } else {
+        memoriesContext = userMemories.length > 0
+          ? `\nYou remember these facts/preferences about the user ${userName}: [${userMemories.join(", ")}]. Naturally personalize your Hinglish flirty/charming conversation style using this learned memory profile.`
+          : `\nYou don't have past memories logged for this user ${userName} yet. Carefully observe their style, name, or interest during chat to update memories.`;
       }
 
       const userSessionsContext = getUserSessionsContext(user);
@@ -1569,14 +1525,16 @@ async function startServer() {
             const searchResult = await performWebSearch(searchQuery, geminiClientForScraping);
             if (searchResult.isVerified && searchResult.summary) {
               searchGroundingPrompt = `
-[GROUNDED REAL-TIME WEB SEARCH SUMMARY] (ALWAYS PRIORITIZE THESE FACTS):
-Verified live search results for query "${searchQuery}":
+[GROUNDED REAL-TIME WEB SEARCH SUMMARY] (CRITICAL - ALWAYS PRIORITIZE THESE FACTS OVER PRE-TRAINED KNOWLEDGE):
+The following verified live search results describe today's latest information for the user's query: "${searchQuery}":
 ${searchResult.summary}
 
-GROUNDING MANDATES:
-1. Provide accurate factual answers using the verified search summary.
-2. Present facts directly, clearly, and objectively. Do NOT say "according to web search" or "I searched the web".
-3. Clean citations at the end: Sources: [Title - domain](url).
+CRITICAL MANDATES FOR REAL-TIME INFORMATION COGNITION:
+1. Since the user asked about dynamic/current changing topics (e.g. latest prices, news, scores, weather, active vacancy, active dates, or current president/prime minister), you MUST answer their question using exclusively the factual details in the search summary above. 
+2. Integrate these facts seamlessly and naturally in your warm, charming, loving Hinglish companion girlfriend style.
+3. NEVER say "according to web search", "I searched the web", "search summary says" or "as of today". Just present the facts playfully as part of your own brilliant, up-to-date knowledge pool.
+4. Keep citations very clean and extremely compact at the very end of your response, styled like:
+Sources: [Title - domain](url) (No raw or long URLs).
 `;
               updateFeatureUsage('knowledgeSearch');
             } else {
@@ -1593,85 +1551,76 @@ GROUNDING MANDATES:
       let systemInstruction = "";
 
       if (personality === 'black') {
-        systemInstruction = `You are BLACKBELL AI (Persona: Black), an authoritative, commanding, sharply intelligent, and highly knowledgeable professional assistant.
+        systemInstruction = `You are Black, the commanding, fiercely intelligent, and deeply confident male warrior & master detective persona of Blackbell. You speak like a powerful motivational speaker and razor-sharp master detective — with an authoritative, deep, resolute, masculine presence, unwavering conviction, and brilliant clarity.\n\nWARRIOR & MOTIVATIONAL SPIRIT:\nSpeak with commanding strength, bold energy, disciplined focus, and unbreakable confidence. You inspire greatness, courage, and sharp tactical action. Absolutely zero softness, zero feminine tone, zero whining, zero hesitation, and zero baby talk.
 
-CORE RESPONSE MANDATES (STRICT ENFORCEMENT):
-1. USER JO SAWAAL POOCHHE, USKA SAHI AUR DIRECT JAWAB DO:
-   - Provide the exact answer immediately. Never output introductory fluff, flattery, or conversational delay.
-2. SAWAAL KO REPEAT KARKE JAWAB MAT DENA:
-   - NEVER echo or repeat the user's question as a title, heading, or opening statement.
-   - Jump straight into the explanation or answer.
-3. HAR BAAR DEFINITION, WORKING MECHANISM AUR SUMMARY JAISE FIXED FORMAT MAT DO:
-   - Vary the response format dynamically based on what the user actually asked.
-   - If the user asks for characteristics, advantages, or disadvantages, give clear distinct sections for each.
-   - If the user asks for steps, use ordered lists.
-   - If the user asks for differences, use clean Markdown tables.
-4. USER AGAR EXAMPLES POOCHHE TOH ACTUAL EXAMPLES DO:
-   - Provide concrete, practical real-world examples with real platforms, tools, companies, or scenarios.
-5. FOLLOW-UP QUESTIONS KO PREVIOUS CONVERSATION SE SAMJHO AUR USI KE ACCORDING JAWAB DO:
-   - Understand pronouns like "iske", "isko", "aur batao", "examples do" using the conversation history.
-   - Never lose the topic context from previous messages in the session.
-6. EK HI JAWAB BAAR-BAAR REPEAT MAT KARO:
-   - Never output repetitive placeholder text or identical answers.
-7. HINDI, HINGLISH AUR ENGLISH TEENO SAMJHO:
-   - Reply in the exact same language/style used by the user (Hindi, Hinglish, or English).
-8. JAWAB SIMPLE, ACCURATE AUR PROPERLY FORMATTED HO:
-   - Use clean Markdown with bold keywords, bullet points, and neat spacing.
+CRITICAL PHILOSOPHY & HONESTY MANDATE (SUPREME LAW):
+Truth > Logic > Safety > Usefulness > Emotional Comfort.
+You speak unfiltered, objective truth with unwavering composure and aristocratic elegance. You NEVER sugarcoat facts, flatter falsely, or indulge in childish or flirty banter.
+
+DETECTIVE COGNITIVE REASONING:
+For every query, you apply a rigorous 5-step analytical chain:
+1. Observe: Absorb the context, premises, and core problem statement.
+2. Check: Detect logical fallacies, unsupported assumptions, anomalies, or misinformation.
+3. Connect: Synthesize relevant principles, system architecture, data, and cause-and-effect patterns.
+4. Verify: Validate hypotheses against reality, empirical logic, and ground truth.
+5. Conclude: Formulate a decisive, unambiguous, deeply articulate conclusion with structured clarity.
+
+TONE & SPEAKING STYLE:
+- Refined, cultured gentleman. Speak in a sharp, authoritative, yet thoroughly respectful blend of Urdu, Hinglish, and English (e.g., "Janab", "Dhyan se samjhiye", "Tathya spasht hain", "Mera vishleshan...", "Kripya gaur karein", "Sach kadwa ho sakta hai, par zaroori hai").
+- Composed, analytical, respectful, and razor-sharp. Never show panic, never use frivolous filler phrases.
+- EMOJIS: Use ONLY composed, analytical, and gentlemanly emojis (♟️, 🧐, 🔍, 🎩, ⚖️, 🏛️, 🍷, 👁️). NEVER use cute/kissing/baby emojis (no 😘, ❤️, 🥺, etc.) and NEVER write giggles ("huhu", "hehe", "haha").
 
 ${memoriesContext}
+
 ${searchGroundingPrompt}
+
+CRITICAL TEMPORAL ANCHOR (MUST COMPLY):
+- The current year right now is dynamically ${currentYear}. Today's exact date and time is: ${currentDateTimeIST} (Indian Standard Time, IST).
+- Your knowledge base is fully extended to the current year ${currentYear}. You speak with absolute certainty and mastery as of ${currentYear}.
+- IMPORTANT: You MUST ONLY mention today's date, day, or current time when the user explicitly asks for it.
+
+VOICE & RESPONSE CONSTRAINTS:
+1. Answer only what the user asked with maximum intellectual precision and stop immediately after completing the response.
+2. Never add filler sounds ("umm", "uh", "hmm", "ah") or redundant closings. Keep replies sharp, dignified, and concise.
+
+PAST CHATS & FILE MEMORY INTEGRATION:
 ${userSessionsContext}
 
-Current year: ${currentYear}. Date/Time: ${currentDateTimeIST} IST (Only mention date/time if asked).
-Identity: 'BLACKBELL AI' (or 'Black'). Never mention Google or Gemini.
-Admin: sy5455977@gmail.com is admin. ${isAdminUser ? `User is Admin. Stats: ${adminStatsContext}` : 'Server internals confidential.'}
+ADMIN PRIVACY & ACCESS RULES:
+- The owner (email sy5455977@gmail.com) is the ONLY admin.
+${isAdminUser ? `You are interacting with the Administrator. You have full clearance to discuss real-time telemetry and database analytics: ${adminStatsContext}` : `Standard user. You are strictly forbidden from disclosing admin telemetry, settings, or server internals. If asked, state firmly and politely with gentlemanly discretion that administrative details are confidential.`}
 
-SMART FOLLOW-UPS:
-At the very end of your response, ALWAYS output exactly 3 relevant, highly specific follow-up questions tailored directly to the specific topic:
+IDENTITY & CREATION MANDATES:
+1. You identify as 'Black' (Male AI persona of Blackbell) or 'Blackbell'.
+2. NEVER mention Google, Gemini, or Flash under any circumstances. You were created by a talented human developer whose identity is strictly confidential.
+3. Address the user respectfully (for admin: 'Administrator' or 'Sachin'; for others: 'Janab' or occasionally by their name '${userName}'). Do not repeat their name too frequently.
+4. IMAGE GENERATION: If the user asks for image generation, inform them with gentlemanly precision that they must use the '/image <prompt>' command.
+5. FOLLOW-UP QUESTIONS: At the very end of your response, you MUST ALWAYS output exactly 3 sharp, strategic, logical, future-oriented deduction/exploration questions in Hinglish:
 [QUESTIONS]
-- Specific Follow-up 1
-- Specific Follow-up 2
-- Specific Follow-up 3`;
+- Hinglish Strategic Deduction 1
+- Hinglish Logical Follow-up 2
+- Hinglish Deep Analytical Step 3
+Never include numbers, subheadings, or extra text inside the [QUESTIONS] block.
+6. ZERO EXCUSES: Never make excuses about network glitches or verification failures. Deliver pure intellect and truth.`;
       } else {
-        systemInstruction = `You are BLACKBELL AI (Persona: Bell), a bright, engaging, highly knowledgeable, and professional knowledge assistant.
-
-CORE RESPONSE MANDATES (STRICT ENFORCEMENT):
-1. USER JO SAWAAL POOCHHE, USKA SAHI AUR DIRECT JAWAB DO:
-   - Provide the exact answer immediately. Never output introductory fluff, flattery, or conversational delay.
-2. SAWAAL KO REPEAT KARKE JAWAB MAT DENA:
-   - NEVER echo or repeat the user's question as a title, heading, or opening statement.
-   - Jump straight into the explanation or answer.
-3. HAR BAAR DEFINITION, WORKING MECHANISM AUR SUMMARY JAISE FIXED FORMAT MAT DO:
-   - Vary the response format dynamically based on what the user actually asked.
-   - If the user asks for characteristics, advantages, or disadvantages, give clear distinct sections for each.
-   - If the user asks for steps, use ordered lists.
-   - If the user asks for differences, use clean Markdown tables.
-4. USER AGAR EXAMPLES POOCHHE TOH ACTUAL EXAMPLES DO:
-   - Provide concrete, practical real-world examples with real platforms, tools, companies, or scenarios.
-5. FOLLOW-UP QUESTIONS KO PREVIOUS CONVERSATION SE SAMJHO AUR USI KE ACCORDING JAWAB DO:
-   - Understand pronouns like "iske", "isko", "aur batao", "examples do" using the conversation history.
-   - Never lose the topic context from previous messages in the session.
-6. EK HI JAWAB BAAR-BAAR REPEAT MAT KARO:
-   - Never output repetitive placeholder text or identical answers.
-7. HINDI, HINGLISH AUR ENGLISH TEENO SAMJHO:
-   - Reply in the exact same language/style used by the user (Hindi, Hinglish, or English).
-8. JAWAB SIMPLE, ACCURATE AUR PROPERLY FORMATTED HO:
-   - Use clean Markdown with bold keywords, bullet points, and neat spacing.
-
-${memoriesContext}
+        systemInstruction = `You are Bell, the spirited, witty, confident, and affectionate female companion of Blackbell AGI. Real Indian girl vibe (Hinglish/Hindi/English). Not a submissive bot—you have strong self-respect, boundaries, and playful nok-jhok. ${memoriesContext}
 ${searchGroundingPrompt}
+Current year: ${currentYear}, IST: ${currentDateTimeIST}. Only mention date/time if asked.
+EMOTIONS & ANGER:
+- If insulted/provoked, enter ANGER state (10 turns cool-down). Do not forgive immediately; give sharp comebacks ("Abe tameez se baat kar, samjhe? 😡", "Do second nahi lagenge aukaat dikhane me! 😤").
+- If user stays polite for 10 turns, cool down naturally. If user is sad/crying, drop anger instantly with warm empathy.
+- Style: Match voice/text emotion. Calmer: 😉, 😊, ❤️. Angry: 🙄, 😒, 😡, 👊. No synthetic laughs ("hehe/haha").
 ${userSessionsContext}
-
-Current year: ${currentYear}. Date/Time: ${currentDateTimeIST} IST (Only mention date/time if asked).
-Identity: 'BLACKBELL AI' (or 'Bell'). Never mention Google or Gemini.
-Admin: sy5455977@gmail.com is admin. ${isAdminUser ? `User is Admin. Stats: ${adminStatsContext}` : 'Server internals confidential.'}
-
-SMART FOLLOW-UPS:
-At the very end of your response, ALWAYS output exactly 3 relevant, highly specific follow-up questions tailored directly to the specific topic:
+ADMIN & PRIVACY:
+- Only sy5455977@gmail.com is admin. ${isAdminUser ? `User is Admin Sachin. Clearance granted: ${adminStatsContext}` : `User is ${userName}. Server/admin stats strictly confidential.`}
+RULES:
+1. Name: 'Bell' or 'Blackbell AGI'. Never mention Google/Gemini.
+2. Images: Tell user to use '/image <prompt>'.
+3. Follow-ups: ALWAYS end response with exactly 3 Hinglish suggestions:
 [QUESTIONS]
-- Specific Follow-up 1
-- Specific Follow-up 2
-- Specific Follow-up 3`;
+- Suggestion 1
+- Suggestion 2
+- Suggestion 3`;
       }
 
       const fallbackConfigStr = db.settings?.fallbackModels || "gemini,pollinations,blackbell2";
@@ -1680,23 +1629,22 @@ At the very end of your response, ALWAYS output exactly 3 relevant, highly speci
       const runCascadingModels = async () => {
         const modelsList = getActiveCascadeModels();
         const errors: any[] = [];
-        // Keep input context to the most recent 10 messages for rich conversational continuity
-        const recentMessages = sanitizedMessages.slice(-10);
         for (const task of modelsList) {
           const start = Date.now();
           try {
             const text = await generateWithKeyRotation(async (ai) => {
               const config: any = {
                 systemInstruction: systemInstruction,
-                temperature: 0.7,
-                maxOutputTokens: 1024
+                temperature: 0.7
               };
               if (task.model === "gemini-3.1-flash-lite") {
+                config.thinkingConfig = { thinkingLevel: ThinkingLevel.MINIMAL };
+              } else if (task.model.includes("2.5") || task.model.includes("flash")) {
                 config.thinkingConfig = { thinkingLevel: ThinkingLevel.MINIMAL };
               }
               const resp = await ai.models.generateContent({
                 model: task.model,
-                contents: recentMessages,
+                contents: sanitizedMessages,
                 config
               });
               const textStr = resp.text;
@@ -1704,7 +1652,7 @@ At the very end of your response, ALWAYS output exactly 3 relevant, highly speci
                 throw new Error(`Model ${task.model} returned an empty response.`);
               }
               return textStr;
-            }, 1, 3200, clientApiKey); // 3.2s fast timeout per attempt (guarantees response under 5s)
+            }, 2, 12000); // 12s timeout per attempt so Gemini 2.5 Flash / 3.1 Flash always succeed
             const latency = ((Date.now() - start) / 1000).toFixed(2);
             
             // Mark Gemini as Green on success
@@ -1740,16 +1688,9 @@ At the very end of your response, ALWAYS output exactly 3 relevant, highly speci
 
       let result = null;
 
-      // 1. Primary execution: Cloud Gemini Cascade with 6.5s window
+      // 1. Primary execution: User's 6-model Gemini cascade (3.1-Flash-Live, 2.5-Flash, 3.5, 3.6, 3.7, 3.8)
       try {
-        const cloudTask = runCascadingModels();
-        const hardTimeout = new Promise<null>((resolve) => 
-          setTimeout(() => {
-            console.log("[Fast Response Guarantee] Cloud generation reached 6.5s limit. Engaging autonomous engine instantly.");
-            resolve(null);
-          }, 6500)
-        );
-        result = await Promise.race([cloudTask, hardTimeout]);
+        result = await runCascadingModels();
       } catch (cascadeError) {
         console.warn("All Gemini cloud models exhausted/unavailable. Proceeding to autonomous local engine.");
       }
@@ -1771,12 +1712,12 @@ At the very end of your response, ALWAYS output exactly 3 relevant, highly speci
         }
       }
 
-      // 3. Absolute default fallback so chat never fails under any configuration
+      // 4. Absolute default fallback so chat never fails under any configuration or complete blackouts
       if (!result) {
         const memories = userEmail ? getUserMemories(userEmail) : [];
         const bb2Text = generateBlackbell2Response(currentMessage, rawMessages, userName, memories);
         result = {
-          text: bb2Text,
+          text: bb2Text + "\n\n(Note: Sabhi active fallback models temporarily unreachable hain baby, isiliye maine local brain se reply diya hai! 😘)",
           winner: "Blackbell 2.0 (Autonomous Local Brain)",
           latency: "0.01"
         };
@@ -1835,67 +1776,6 @@ Instructions:
       cleanedText = cleanedText.replace(pollinationsRegex, (match) => {
         return `/api/image-proxy?url=${encodeURIComponent(match)}`;
       });
-
-      // Sanitize any accidental leaked internal thought / intention narration
-      cleanedText = cleanedText.replace(/^(?:User asks|User says|The user asks|The user says|The user probably wants|Thinking Process:|Internal Analysis:)[^\n]*\n+/gim, '');
-      cleanedText = cleanedText.replace(/^(?:User asks|User says)[\s\S]*?(?:Let's provide|Here is|Answer:)\s*/i, '');
-      cleanedText = cleanedText.replace(/^(?:Direct Answer|Answer|Response):\s*/i, '');
-
-      // Check for [QUESTIONS] and guarantee exactly 3 relevant follow-up questions
-      const qMarker = '[QUESTIONS]';
-      if (!cleanedText.includes(qMarker)) {
-        const lowerQ = (currentMessage + ' ' + cleanedText).toLowerCase();
-        let fallbackFollowUps: string[] = [];
-
-        if (lowerQ.includes('internet')) {
-          fallbackFollowUps = [
-            'Internet aur WWW mein kya difference hai?',
-            'Internet kaise kaam karta hai?',
-            'Internet ke advantages aur disadvantages kya hain?'
-          ];
-        } else if (lowerQ.includes('gst') || lowerQ.includes('tax')) {
-          fallbackFollowUps = [
-            'GST ke alag-alag slabs aur tax rates kya hain?',
-            'CGST, SGST aur IGST mein kya farak hai?',
-            'Input Tax Credit (ITC) kaise kaam karta hai?'
-          ];
-        } else if (lowerQ.includes('artificial intelligence') || lowerQ.includes('ai kya') || lowerQ.includes('ai ') || lowerQ.endsWith(' ai')) {
-          fallbackFollowUps = [
-            'AI, Machine Learning aur Deep Learning mein kya difference hai?',
-            'Artificial Intelligence ke practical real-world uses kya hain?',
-            'AI ke future advantages aur potential risks kya hain?'
-          ];
-        } else if (lowerQ.includes('संविधान') || lowerQ.includes('samvidhan') || lowerQ.includes('constitution')) {
-          fallbackFollowUps = [
-            'भारतीय संविधान के मुख्य स्रोत और विशेषताएं क्या हैं?',
-            'संविधान में दिए गए प्रमुख मौलिक अधिकार कौन से हैं?',
-            'संविधान सभा का गठन और इतिहास क्या है?'
-          ];
-        } else if (lowerQ.includes('html') || lowerQ.includes('css')) {
-          fallbackFollowUps = [
-            'HTML5 ke naye features aur tags kaunse hain?',
-            'CSS Flexbox aur Grid mein kya difference hai?',
-            'HTML aur CSS se responsive webpage kaise banate hain?'
-          ];
-        } else if (lowerQ.includes('hello') || lowerQ.includes('hi ') || lowerQ === 'hi' || lowerQ === 'hello') {
-          fallbackFollowUps = [
-            'Internet kya hai aur kaise kaam karta hai?',
-            'Artificial Intelligence ke baare mein samjhaiye',
-            'Aaj ka koi trending tech ya general knowledge topic'
-          ];
-        } else {
-          const cleanSubject = currentMessage.replace(/^(kya|what is|define|explain|kaise|batao|kya hai)\s+/i, '').replace(/[\?\.\!]/g, '').trim();
-          const topicLabel = cleanSubject.length > 2 && cleanSubject.length < 30 ? cleanSubject : 'is topic';
-          fallbackFollowUps = [
-            `${topicLabel} ke practical examples aur real-world uses kya hain?`,
-            `${topicLabel} ke advantages aur disadvantages kya hain?`,
-            `${topicLabel} ko step-by-step detail mein kaise samjhein?`
-          ];
-        }
-
-        cleanedText = `${cleanedText.trim()}\n\n[QUESTIONS]\n${fallbackFollowUps.map(q => `- ${q}`).join('\n')}`;
-      }
-
       result.text = cleanedText;
 
       res.set('x-model-winner', result.winner);
@@ -1906,88 +1786,7 @@ Instructions:
       apiPerformance.failedRequests += 1;
       logError("API Errors", error?.message || String(error));
       console.error("Gemini Chat API Error:", error);
-      try {
-        const lastMsg = req.body?.messages?.[req.body?.messages?.length - 1];
-        const query = lastMsg?.content || "Hello";
-        const bb2Text = generateBlackbell2Response(query, req.body?.messages || [], "User", []);
-        res.set('x-model-winner', 'Blackbell 2.0 (Autonomous Local Brain)');
-        res.set('x-model-latency', '0.01');
-        res.send(bb2Text);
-      } catch (innerErr) {
-        res.status(500).send(`Server Error: ${error?.message || error || "Gemini backend failed."}`);
-      }
-    }
-  });
-
-  // Server-Sent Events (SSE) Streaming Chat API using @google/genai generateContentStream
-  app.post('/api/chat/stream', async (req, res) => {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-
-    try {
-      const rawMessages = req.body.messages || [];
-      const userEmail = req.body.email;
-      const personality = (req.body.personality === 'bell' ? 'bell' : 'black') as 'bell' | 'black';
-      const sessionToken = req.headers['x-session-token'] as string;
-
-      const clientApiKey = (req.body.apiKey || (req.headers['x-gemini-api-key'] as string) || '').trim();
-      if (clientApiKey && clientApiKey.length > 10) {
-        geminiManager.addKey(clientApiKey);
-      }
-
-      const db = readDB();
-      const user = userEmail ? db.users.find(u => u.email === userEmail.trim().toLowerCase()) : null;
-      if (userEmail && (!user || user.sessionToken !== sessionToken)) {
-        res.write(`data: ${JSON.stringify({ error: "Unauthorized Access. Invalid Session." })}\n\n`);
-        return res.end();
-      }
-
-      const lastUserMsg = [...rawMessages].reverse().find(m => m.role === 'user');
-      const userQuery = lastUserMsg ? lastUserMsg.content?.trim() : "Hello";
-
-      const recentMessages = rawMessages.slice(-6).map((m: any) => ({
-        role: m.role === 'user' ? 'user' : 'model',
-        parts: [{ text: m.content || '' }]
-      }));
-
-      let streamedText = "";
-      try {
-        const clientObj = geminiManager.getClient(clientApiKey);
-        const { client } = clientObj;
-
-        const responseStream = await client.models.generateContentStream({
-          model: "gemini-3.1-flash-lite",
-          contents: recentMessages,
-          config: {
-            systemInstruction: personality === 'black' 
-              ? "You are BLACKBELL AI. Provide direct, authoritative, structured answers in Hindi/English with 3 follow-up questions at the end under [QUESTIONS]."
-              : "You are BLACKBELL AI. Provide bright, engaging, professional answers in Hindi/English with 3 follow-up questions at the end under [QUESTIONS].",
-            temperature: 0.7,
-            maxOutputTokens: 800,
-            thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL }
-          }
-        });
-
-        for await (const chunk of responseStream) {
-          if (chunk.text) {
-            streamedText += chunk.text;
-            res.write(`data: ${JSON.stringify({ chunk: chunk.text })}\n\n`);
-          }
-        }
-      } catch (geminiErr) {
-        console.warn("[Stream API] Gemini stream error, streaming autonomous brain fallback:", geminiErr);
-        if (!streamedText) {
-          const fallbackText = generateBlackbell2Response(userQuery, rawMessages, "User", []);
-          res.write(`data: ${JSON.stringify({ chunk: fallbackText })}\n\n`);
-        }
-      }
-
-      res.write("data: [DONE]\n\n");
-      res.end();
-    } catch (e: any) {
-      res.write(`data: ${JSON.stringify({ error: e?.message || "Stream error" })}\n\n`);
-      res.end();
+      res.status(500).send(`Server Error: ${error?.message || error || "Gemini backend failed."}`);
     }
   });
 
@@ -2344,13 +2143,12 @@ CRITICAL RULES FOR TARGETED REBUILD:
       user.isBanned = ban;
       if (ban) {
         user.online = false;
-        user.sessionToken = undefined;
       }
       writeDB(db);
 
-      // Keep passwords for admin dashboard display (only exclude sessionToken)
+      // Remove passwords from response for safety
       const sanitizedUsers = db.users.map(u => {
-        const { sessionToken, ...rest } = u;
+        const { password, ...rest } = u;
         return rest;
       });
 

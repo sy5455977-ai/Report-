@@ -10,7 +10,6 @@ import { BellVideoScreen } from './components/BellVideoScreen';
 import { AdminVideoSettings } from './components/AdminVideoSettings';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { callDirectGeminiChat, generateGeminiDirectTTS } from './utils/geminiClient';
-import { MarkdownRenderer, sanitizeAiText } from './components/MarkdownRenderer';
 
 type Message = { 
   id?: string;
@@ -45,94 +44,22 @@ function getRelativeTime(timestamp: number) {
   return `${days} days ago`;
 }
 
-// Extract questions block from the raw AI response, ensuring 3 smart follow-up suggestions always exist
+// Extract questions block from the raw AI response
 function parseAiResponse(content: string) {
   if (!content) return { mainText: '', questions: [] as string[] };
   const marker = '[QUESTIONS]';
   const idx = content.indexOf(marker);
-  let mainText = content;
-  let questions: string[] = [];
-
-  if (idx !== -1) {
-    mainText = content.substring(0, idx).trim();
-    const qText = content.substring(idx + marker.length).trim();
-    questions = qText
-      .split('\n')
-      .map(line => line.trim())
-      .map(line => line.replace(/^[-\*\d\.\)\s]+/, '').trim())
-      .filter(Boolean)
-      .slice(0, 3);
+  if (idx === -1) {
+    return { mainText: content, questions: [] as string[] };
   }
-
-  // Sanitize any leaked internal thought / intention narration
-  mainText = sanitizeAiText(mainText);
-
-  // Guaranteed 3 contextual follow-up action cards fallback (matches user requirements and screenshots)
-  if (questions.length === 0) {
-    const lower = content.toLowerCase();
-    if (lower.includes('calculator') || lower.includes('calc') || lower.includes('math') || lower.includes('hisaab')) {
-      questions = [
-        '/rebuild scientific calculator functions (sin, cos, log) add karo',
-        '/rebuild calculation history log panel add karo',
-        '/rebuild theme switcher (light/dark/neon) add karo'
-      ];
-    } else if (lower.includes('game') || lower.includes('canvas') || lower.includes('score') || lower.includes('player') || lower.includes('jump')) {
-      questions = [
-        '/rebuild sound effects aur score animations add karo',
-        '/rebuild mobile touch controls improve karo',
-        '/rebuild restart and high score saving feature add karo'
-      ];
-    } else if (lower.includes('<!doctype') || lower.includes('<html') || lower.includes('/build') || lower.includes('/rebuild') || lower.includes('index.html')) {
-      questions = [
-        '/rebuild modern dark/light theme switcher add karo',
-        '/rebuild mobile responsive layout and touch gestures improve karo',
-        '/rebuild sound effects aur interactive animations add karo'
-      ];
-    } else if (lower.includes('internet')) {
-      questions = [
-        'Internet aur WWW mein kya difference hai?',
-        'Internet kaise kaam karta hai?',
-        'Internet ke advantages aur disadvantages kya hain?'
-      ];
-    } else if (lower.includes('gst') || lower.includes('tax')) {
-      questions = [
-        'GST ke alag-alag slabs aur tax rates kya hain?',
-        'CGST, SGST aur IGST mein kya farak hai?',
-        'Input Tax Credit (ITC) kaise kaam karta hai?'
-      ];
-    } else if (lower.includes('artificial intelligence') || lower.includes('ai kya') || lower.includes('what is ai') || lower.includes('ai ')) {
-      questions = [
-        'AI, Machine Learning aur Deep Learning mein kya difference hai?',
-        'Artificial Intelligence ke practical real-world uses kya hain?',
-        'AI ke future advantages aur potential risks kya hain?'
-      ];
-    } else if (lower.includes('संविधान') || lower.includes('samvidhan') || lower.includes('constitution')) {
-      questions = [
-        'भारतीय संविधान के मुख्य स्रोत और विशेषताएं क्या हैं?',
-        'संविधान में दिए गए प्रमुख मौलिक अधिकार कौन से हैं?',
-        'संविधान सभा का गठन और इतिहास क्या है?'
-      ];
-    } else if (lower.includes('html') || lower.includes('css')) {
-      questions = [
-        'HTML5 ke naye features aur tags kaunse hain?',
-        'CSS Flexbox aur Grid mein kya difference hai?',
-        'HTML aur CSS se responsive webpage kaise banate hain?'
-      ];
-    } else if (lower.includes('hello') || lower.includes('hi ') || lower === 'hello' || lower === 'hi') {
-      questions = [
-        'Internet kya hai aur kaise kaam karta hai?',
-        'Artificial Intelligence ke baare mein samjhaiye',
-        'Aaj ka koi trending tech ya general knowledge topic'
-      ];
-    } else {
-      questions = [
-        'Is topic ke practical examples aur real-world uses kya hain?',
-        'Iske advantages aur disadvantages kya hain?',
-        'Isko step-by-step detail mein kaise samjhein?'
-      ];
-    }
-  }
-
+  const mainText = content.substring(0, idx).trim();
+  const qText = content.substring(idx + marker.length).trim();
+  const questions = qText
+    .split('\n')
+    .map(line => line.trim())
+    .map(line => line.replace(/^[-\*\d\.\)\s]+/, '').trim())
+    .filter(Boolean)
+    .slice(0, 3);
   return { mainText, questions };
 }
 
@@ -183,64 +110,28 @@ function processMessageContent(content: string) {
   cleanText = cleanText.replace(/!\[[^\]]*\]\(\s*\)/g, '');
   cleanText = cleanText.replace(/\[[^\]]*\]\(\s*\)/g, '');
 
-  // Clean up any duplicate horizontal spaces while preserving newlines
-  cleanText = cleanText.replace(/[^\S\r\n]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  // Clean up any duplicate/excessive spaces
+  cleanText = cleanText.replace(/\s+/g, ' ').trim();
 
   return { cleanText, imageUrls };
-}
-
-// Safely close unclosed HTML tags if streaming or model response stopped before completion
-function autoCloseHtml(raw: string): string {
-  let s = raw.trim();
-  if (s.includes('<style') && !s.includes('</style>')) s += '\n</style>';
-  if (s.includes('<script') && !s.includes('</script>')) s += '\n</script>';
-  if (s.includes('<body') && !s.includes('</body>')) s += '\n</body>';
-  if (s.includes('<html') && !s.includes('</html>')) s += '\n</html>';
-  return s;
 }
 
 // Extract single-file index.html web app if present in the message
 function extractHtmlApp(content: string): { htmlCode: string | null; textBefore: string; textAfter: string } {
   if (!content) return { htmlCode: null, textBefore: '', textAfter: '' };
 
-  // 1. Standard markdown code fences ```html ... ``` (closed)
-  const closedFenceMatch = content.match(/```(?:html|htm)?\s*([\s\S]*?<!DOCTYPE[\s\S]*?<\/html>[\s\S]*?)\s*```/i) 
-    || content.match(/```(?:html|htm)?\s*([\s\S]*?<html[\s\S]*?<\/html>[\s\S]*?)\s*```/i)
-    || content.match(/```(?:html|htm)?\s*([\s\S]*?)\s*```/i);
+  const htmlMatch = content.match(/```html\s*([\s\S]*?<!DOCTYPE[\s\S]*?<\/html>[\s\S]*?)\s*```/i) 
+    || content.match(/```html\s*([\s\S]*?<html[\s\S]*?<\/html>[\s\S]*?)\s*```/i)
+    || content.match(/```html\s*([\s\S]*?)\s*```/i);
     
-  if (closedFenceMatch && closedFenceMatch.index !== undefined && closedFenceMatch[1]) {
-    const fullMatch = closedFenceMatch[0];
-    const htmlCode = closedFenceMatch[1].trim();
+  if (htmlMatch && htmlMatch.index !== undefined && htmlMatch[1]) {
+    const fullMatch = htmlMatch[0];
+    const htmlCode = htmlMatch[1].trim();
     if (htmlCode.includes('<') && (htmlCode.includes('<!DOCTYPE') || htmlCode.includes('<html') || htmlCode.includes('<body') || htmlCode.includes('<script') || htmlCode.includes('<style') || htmlCode.includes('<div') || htmlCode.includes('<canvas'))) {
-      const textBefore = content.substring(0, closedFenceMatch.index).trim();
-      const textAfter = content.substring(closedFenceMatch.index + fullMatch.length).trim();
-      return { htmlCode: autoCloseHtml(htmlCode), textBefore, textAfter };
+      const textBefore = content.substring(0, htmlMatch.index).trim();
+      const textAfter = content.substring(htmlMatch.index + fullMatch.length).trim();
+      return { htmlCode, textBefore, textAfter };
     }
-  }
-
-  // 2. Unclosed code fences ```html <!DOCTYPE ... (streaming or truncated)
-  const unclosedFenceMatch = content.match(/```(?:html|htm)?\s*([\s\S]*)$/i);
-  if (unclosedFenceMatch && unclosedFenceMatch.index !== undefined && unclosedFenceMatch[1]) {
-    const rawInner = unclosedFenceMatch[1].trim();
-    if (rawInner.includes('<') && (rawInner.includes('<!DOCTYPE') || rawInner.includes('<html') || rawInner.includes('<head') || rawInner.includes('<body') || rawInner.includes('<style') || rawInner.includes('<script'))) {
-      const textBefore = content.substring(0, unclosedFenceMatch.index).trim();
-      return { htmlCode: autoCloseHtml(rawInner), textBefore, textAfter: '' };
-    }
-  }
-
-  // 3. Bare HTML document <!DOCTYPE html> ... </html> without code fences
-  const bareDocMatch = content.match(/(<!DOCTYPE\s+html[\s\S]*?<\/html>)/i);
-  if (bareDocMatch && bareDocMatch.index !== undefined && bareDocMatch[1]) {
-    const textBefore = content.substring(0, bareDocMatch.index).trim();
-    const textAfter = content.substring(bareDocMatch.index + bareDocMatch[0].length).trim();
-    return { htmlCode: bareDocMatch[1].trim(), textBefore, textAfter };
-  }
-
-  // 4. Bare unclosed <!DOCTYPE html> ... to end of message
-  const bareDocUnclosed = content.match(/(<!DOCTYPE\s+html[\s\S]*)$/i);
-  if (bareDocUnclosed && bareDocUnclosed.index !== undefined && bareDocUnclosed[1]) {
-    const textBefore = content.substring(0, bareDocUnclosed.index).trim();
-    return { htmlCode: autoCloseHtml(bareDocUnclosed[1].trim()), textBefore, textAfter: '' };
   }
 
   return { htmlCode: null, textBefore: content, textAfter: '' };
@@ -413,8 +304,7 @@ function StreamingText({
   onComplete, 
   onUpdate,
   active = true,
-  onTextUpdate,
-  theme = 'dark'
+  onTextUpdate
 }: { 
   key?: string;
   content: string; 
@@ -422,7 +312,6 @@ function StreamingText({
   onUpdate?: () => void;
   active?: boolean; 
   onTextUpdate?: (text: string) => void;
-  theme?: 'dark' | 'light';
 }) {
   const [displayedText, setDisplayedText] = useState(active ? "" : content);
   const wordsRef = useRef<string[]>([]);
@@ -491,7 +380,7 @@ function StreamingText({
     };
   }, [content, active]);
 
-  return <MarkdownRenderer content={displayedText} theme={theme} className="transition-all duration-150" />;
+  return <span className="transition-all duration-150">{displayedText}</span>;
 }
 
 const MOTIVATIONAL_QUOTES = [
@@ -560,7 +449,7 @@ export default function App() {
   });
 
   const [userApiKey, setUserApiKey] = useState<string>(() => {
-    return localStorage.getItem('blackbell_gemini_api_key') || (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || '';
+    return localStorage.getItem('blackbell_gemini_api_key') || '';
   });
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
 
@@ -696,25 +585,6 @@ export default function App() {
       const email = parsedUser.email;
       const username = parsedUser.username;
 
-      // Check if user is marked banned locally
-      if (parsedUser.isBanned) {
-        handleLogout();
-        return false;
-      }
-
-      // Check local registered users list for ban status
-      try {
-        const rawLocalUsers = localStorage.getItem('blackbell_registered_users');
-        if (rawLocalUsers) {
-          const localList = JSON.parse(rawLocalUsers);
-          const found = Array.isArray(localList) && localList.find((u: any) => u.email === email);
-          if (found && found.isBanned) {
-            handleLogout();
-            return false;
-          }
-        }
-      } catch (e) {}
-
       // Try logging in first
       let res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -722,19 +592,7 @@ export default function App() {
         body: JSON.stringify({ email, password: savedPassword })
       });
 
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('text/html') || res.status === 404) {
-        // Static host on Netlify / Vercel detected (returned HTML or 404)
-        return true;
-      }
-
-      // Strict ban enforcement: if 403, user is permanently banned!
-      if (res.status === 403) {
-        handleLogout();
-        return false;
-      }
-
-      // If login fails because user does not exist on fresh backend, register
+      // If login fails (user does not exist because DB was reset), register
       if (!res.ok) {
         res = await fetch('/api/auth/register', {
           method: 'POST',
@@ -743,10 +601,9 @@ export default function App() {
         });
       }
 
-      const resContentType = res.headers.get('content-type') || '';
-      if (res.ok && resContentType.includes('application/json')) {
-        const data = await res.json().catch(() => null);
-        if (data && data.success && data.user) {
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.user) {
           setCurrentUser(data.user);
           localStorage.setItem('blackbell_user', JSON.stringify(data.user));
           
@@ -1447,7 +1304,7 @@ export default function App() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => {
         controller.abort();
-      }, 3000);
+      }, 8000);
 
       try {
         const response = await fetch('/api/tts', {
@@ -1455,69 +1312,49 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             text, 
-            voice: personality === 'black' ? 'Charon' : 'Aoede',
+            voice: personality === 'black' ? 'Charon' : 'Zephyr',
             personality
           }),
           signal: controller.signal
         });
         clearTimeout(timeoutId);
-        const contentType = response.headers.get('content-type') || '';
-        if (response.ok && contentType.includes('application/json')) {
-          const data = await response.json().catch(() => null);
-          if (data && data.audio) {
-              if (data.format === 'wav' || data.audio.startsWith('UklGR')) {
-                try {
-                  const audio = new Audio(`data:audio/wav;base64,${data.audio}`);
-                  audio.onended = () => {
-                    setPlayingMessageId(null);
-                    setIsAiSpeaking(false);
-                  };
-                  audio.onerror = () => {
-                    playAudioChunk(data.audio, () => {
-                      setPlayingMessageId(null);
-                      setIsAiSpeaking(false);
-                    });
-                  };
-                  await audio.play();
-                  success = true;
-                } catch (audioErr) {
+        if (response.ok) {
+          const data = await response.json();
+          if (data.audio) {
+            // High-fidelity native audio playback for complete WAV files
+            if (data.format === 'wav' || data.audio.startsWith('UklGR')) {
+              try {
+                const audio = new Audio(`data:audio/wav;base64,${data.audio}`);
+                audio.onended = () => {
+                  setPlayingMessageId(null);
+                  setIsAiSpeaking(false);
+                };
+                audio.onerror = () => {
                   playAudioChunk(data.audio, () => {
                     setPlayingMessageId(null);
                     setIsAiSpeaking(false);
                   });
-                  success = true;
-                }
-              } else {
+                };
+                await audio.play();
+                success = true;
+              } catch (audioErr) {
                 playAudioChunk(data.audio, () => {
                   setPlayingMessageId(null);
                   setIsAiSpeaking(false);
                 });
                 success = true;
               }
-            }
-          }
-        } catch (err) {
-          // Fall through smoothly to direct Gemini TTS
-        }
-
-      if (!success) {
-        const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || (typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : '') || '';
-        if (activeKey) {
-          try {
-            // Strictly masculine Charon for Black, feminine Aoede for Bell
-            const voiceName = personality === 'black' ? 'Charon' : 'Aoede';
-            const ttsResult = await generateGeminiDirectTTS(text, voiceName, activeKey);
-            if (ttsResult?.base64Audio) {
-              const played = await playBase64WavInWebAudio(ttsResult.base64Audio, () => {
+            } else {
+              playAudioChunk(data.audio, () => {
                 setPlayingMessageId(null);
                 setIsAiSpeaking(false);
               });
-              if (played) success = true;
+              success = true;
             }
-          } catch (e) {
-            console.warn("Direct Gemini TTS fallback error:", e);
           }
         }
+      } catch (err) {
+        console.warn("Backend TTS connection failed or timed out. Falling back to browser Speech Synthesis:", err);
       }
 
       if (!success) {
@@ -1530,7 +1367,7 @@ export default function App() {
           let chosenVoice = null;
           if (personality === 'black') {
             chosenVoice = voices.find(v => 
-              (v.name.toLowerCase().includes('male') || v.name.toLowerCase().includes('david') || v.name.toLowerCase().includes('george') || v.name.toLowerCase().includes('guy') || v.name.toLowerCase().includes('rishi') || v.name.toLowerCase().includes('prabhat')) && !v.name.toLowerCase().includes('female')
+              (v.name.toLowerCase().includes('male') || v.name.toLowerCase().includes('david') || v.name.toLowerCase().includes('george') || v.name.toLowerCase().includes('guy') || v.name.toLowerCase().includes('rishi')) && !v.name.toLowerCase().includes('female')
             ) || voices.find(v => v.lang.startsWith('hi')) || voices[0];
           } else {
             chosenVoice = voices.find(v => 
@@ -1544,9 +1381,6 @@ export default function App() {
           
           if (chosenVoice) {
             utterance.voice = chosenVoice;
-            utterance.lang = chosenVoice.lang || (personality === 'black' ? 'en-IN' : 'hi-IN');
-          } else {
-            utterance.lang = personality === 'black' ? 'en-IN' : 'hi-IN';
           }
           utterance.rate = personality === 'black' ? 1.02 : 1.05;
           utterance.pitch = personality === 'black' ? 0.78 : 1.1; 
@@ -1884,7 +1718,7 @@ export default function App() {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
     try {
-      const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || '';
+      const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || '';
       let res: Response | null = null;
       let backendFailed = false;
 
@@ -1919,11 +1753,6 @@ export default function App() {
             }))
           })
         });
-
-        const contentType = res.headers.get('content-type') || '';
-        if (contentType.includes('text/html') || res.status === 404) {
-          backendFailed = true;
-        }
       } catch (networkErr: any) {
         if (networkErr.name === 'AbortError') throw networkErr;
         console.warn("[Vercel/Netlify Mode] Backend /api/chat unreachable, activating client-direct execution:", networkErr);
@@ -1932,70 +1761,34 @@ export default function App() {
 
       // If backend failed (e.g. 404 on Vercel/Netlify static host, or network failure)
       if (backendFailed || (!res?.ok && res?.status !== 401 && res?.status !== 403)) {
-        // Direct /image command execution in client-direct mode without backend proxy dependency
-        if (currentText.toLowerCase().startsWith('/image')) {
-          let prompt = "";
-          if (currentText.toLowerCase().startsWith('/image ')) {
-            prompt = currentText.substring(7).trim();
-          } else {
-            prompt = currentText.substring(6).trim();
-          }
+        if (activeKey) {
+          console.info("[Deployment Mode] Running client-direct Gemini execution with personal API Key...");
+          const directResult = await callDirectGeminiChat({
+            messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+            personality,
+            apiKey: activeKey,
+            userName: currentUser?.username || 'User',
+            isAdmin: currentUser?.email === 'sy5455977@gmail.com'
+          });
 
-          if (!prompt) {
-            const guideMsg: Message = {
-              id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-              role: 'ai',
-              content: "Aww sweetie, image banana ke liye ek prompt to likho! Jaise ki: `/image gorgeous princess` ya `/image cute puppy`. Main abhi aapke liye beautiful image generate kar dungi! 😘\n\n[QUESTIONS]\n- /image cute puppy playing with a ball\n- /image futuristic cyber city at sunset\n- /image cute anime girl companion",
-              winner: 'Blackbell AGI (Image Vision)',
-              latency: '0.00'
-            };
-            updateActiveSessionMessages([...newMessages, guideMsg]);
-            setIsTyping(false);
-            return;
-          }
+          const formattedContent = directResult.questions && directResult.questions.length > 0
+            ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
+            : directResult.text;
 
-          const seed = Math.floor(Math.random() * 1000000);
-          const directImageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true&seed=${seed}`;
-          const imageMsg: Message = {
+          const finalMsg: Message = {
             id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
             role: 'ai',
-            content: directImageUrl,
-            isImage: true,
-            winner: 'Blackbell 2.0 (Image Vision)',
-            latency: '0.45s'
+            content: formattedContent,
+            winner: 'Gemini (Direct Client Mode)',
+            latency: '0.4s'
           };
-          updateActiveSessionMessages([...newMessages, imageMsg]);
-          setIsTyping(false);
+
+          updateActiveSessionMessages([...newMessages, finalMsg]);
+          if (autoSpeak) {
+            playMessageTTS(directResult.text, newMessages.length);
+          }
           return;
         }
-
-        console.info("[Deployment Mode] Running client-direct AI execution...");
-        const directResult = await callDirectGeminiChat({
-          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
-          personality,
-          apiKey: activeKey,
-          userName: currentUser?.username || 'User',
-          isAdmin: currentUser?.email === 'sy5455977@gmail.com'
-        });
-
-        const formattedContent = directResult.questions && directResult.questions.length > 0
-          ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
-          : directResult.text;
-
-        const isBuildOrRebuild = currentText.toLowerCase().startsWith('/build') || currentText.toLowerCase().startsWith('/rebuild');
-        const finalMsg: Message = {
-          id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          role: 'ai',
-          content: formattedContent,
-          winner: isBuildOrRebuild ? 'Blackbell 2.0 (Website Builder)' : (activeKey ? 'Gemini 2.5 Flash (Direct Mode)' : 'Blackbell Autonomous Engine'),
-          latency: '0.4s'
-        };
-
-        updateActiveSessionMessages([...newMessages, finalMsg]);
-        if (autoSpeak) {
-          playMessageTTS(directResult.text, newMessages.length);
-        }
-        return;
       }
 
       if (res && res.status === 401) {
@@ -2040,34 +1833,7 @@ export default function App() {
 
       if (!res || !res.ok) {
         const errText = res ? await res.text() : "Network error";
-        console.warn(`[Backend /api/chat status ${res?.status}]: ${errText}. Running automatic client-direct multi-model fallback cascade...`);
-        
-        const directResult = await callDirectGeminiChat({
-          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
-          personality,
-          apiKey: activeKey,
-          userName: currentUser?.username || 'User',
-          isAdmin: currentUser?.email === 'sy5455977@gmail.com'
-        });
-
-        const formattedContent = directResult.questions && directResult.questions.length > 0
-          ? `${directResult.text}\n\n[QUESTIONS]\n${directResult.questions.map(q => `- ${q}`).join('\n')}`
-          : directResult.text;
-
-        const isBuildOrRebuild = currentText.toLowerCase().startsWith('/build') || currentText.toLowerCase().startsWith('/rebuild');
-        const finalMsg: Message = {
-          id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          role: 'ai',
-          content: formattedContent,
-          winner: isBuildOrRebuild ? 'Blackbell 2.0 (Website Builder)' : (activeKey ? 'Gemini 2.5 Flash (Direct Mode)' : 'Blackbell Autonomous Engine'),
-          latency: '0.4s'
-        };
-
-        updateActiveSessionMessages([...newMessages, finalMsg]);
-        if (autoSpeak) {
-          playMessageTTS(directResult.text, newMessages.length);
-        }
-        return;
+        throw new Error(errText);
       }
 
       const winner = res.headers.get('x-model-winner') || '';
@@ -2121,263 +1887,51 @@ export default function App() {
   const hasOpenedAppInBackgroundRef = useRef<boolean>(false);
 
   // Direct Client-Side Voice Engine Refs for Vercel & Netlify standalone deployment
-  type VoiceMachineState = 'idle' | 'listening' | 'processing' | 'speaking';
-  const voiceStateRef = useRef<VoiceMachineState>('idle');
   const speechRecognitionRef = useRef<any>(null);
   const isDirectVoiceActiveRef = useRef<boolean>(false);
-  const isStartingDirectVoiceRef = useRef<boolean>(false);
+  const isDirectAiRespondingRef = useRef<boolean>(false);
   const silenceTimerRef = useRef<any>(null);
-  const speechGracePeriodTimerRef = useRef<any>(null);
   const currentDirectAudioRef = useRef<HTMLAudioElement | null>(null);
-  const directVoiceAbortControllerRef = useRef<AbortController | null>(null);
-  const directAudioContextRef = useRef<AudioContext | null>(null);
-  const directCurrentSourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
-  const directVoiceHistoryRef = useRef<Array<{ role: 'user' | 'ai'; content: string }>>([]);
-  const currentTurnSpeechRef = useRef<string>('');
-  const isRecognitionActiveRef = useRef<boolean>(false);
-  const restartDebounceTimerRef = useRef<any>(null);
-  const currentSentenceQueueAbortRef = useRef<boolean>(false);
-
-  // Comprehensive immediate cancellation of all audio sources
-  const stopAllVoicePlayback = () => {
-    currentSentenceQueueAbortRef.current = true;
-    // 1. Web Audio API source node
-    if (directCurrentSourceNodeRef.current) {
-      try {
-        directCurrentSourceNodeRef.current.onended = null;
-        directCurrentSourceNodeRef.current.stop(0);
-        directCurrentSourceNodeRef.current.disconnect();
-      } catch (e) {}
-      directCurrentSourceNodeRef.current = null;
-    }
-    // 2. HTML5 audio fallback
-    if (currentDirectAudioRef.current) {
-      try {
-        currentDirectAudioRef.current.pause();
-        currentDirectAudioRef.current.currentTime = 0;
-        currentDirectAudioRef.current.src = '';
-      } catch (e) {}
-      currentDirectAudioRef.current = null;
-    }
-    // 3. Browser Speech Synthesis
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      try {
-        window.speechSynthesis.cancel();
-      } catch (e) {}
-    }
-    setIsAiSpeaking(false);
-  };
-
-  // Play WAV or raw 24kHz PCM audio buffer using Web Audio API (single-source buffer node with fallback)
-  const playBase64WavInWebAudio = async (base64Audio: string, onEnded: () => void): Promise<boolean> => {
-    try {
-      stopAllVoicePlayback();
-
-      if (!directAudioContextRef.current || directAudioContextRef.current.state === 'closed') {
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        directAudioContextRef.current = new AudioCtx();
-      }
-      const ctx = directAudioContextRef.current;
-      if (ctx.state === 'suspended') {
-        await ctx.resume();
-      }
-
-      // Convert base64 to binary buffer
-      const binaryStr = atob(base64Audio);
-      const len = binaryStr.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) {
-        bytes[i] = binaryStr.charCodeAt(i);
-      }
-
-      const isRiffWav = bytes.length > 4 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46;
-      let audioBuffer: AudioBuffer;
-
-      if (isRiffWav) {
-        audioBuffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
-      } else {
-        // Raw 16-bit PCM (24000Hz mono) from Gemini Audio API
-        const sampleCount = Math.floor(bytes.length / 2);
-        const float32 = new Float32Array(sampleCount);
-        const dataView = new DataView(bytes.buffer, bytes.byteOffset, sampleCount * 2);
-        for (let i = 0; i < sampleCount; i++) {
-          float32[i] = dataView.getInt16(i * 2, true) / 32768.0;
-        }
-        audioBuffer = ctx.createBuffer(1, float32.length, 24000);
-        audioBuffer.getChannelData(0).set(float32);
-      }
-
-      const sourceNode = ctx.createBufferSource();
-      sourceNode.buffer = audioBuffer;
-      sourceNode.connect(ctx.destination);
-      directCurrentSourceNodeRef.current = sourceNode;
-
-      setIsAiSpeaking(true);
-
-      sourceNode.onended = () => {
-        if (directCurrentSourceNodeRef.current === sourceNode) {
-          directCurrentSourceNodeRef.current = null;
-          setIsAiSpeaking(false);
-          onEnded();
-        }
-      };
-
-      sourceNode.start(0);
-      return true;
-    } catch (err) {
-      console.warn("[WebAudio] Direct decode failed, falling back to HTML5 audio element:", err);
-      try {
-        stopAllVoicePlayback();
-        const audio = new Audio(`data:audio/wav;base64,${base64Audio}`);
-        currentDirectAudioRef.current = audio;
-        setIsAiSpeaking(true);
-        audio.onended = () => {
-          setIsAiSpeaking(false);
-          currentDirectAudioRef.current = null;
-          onEnded();
-        };
-        audio.onerror = () => {
-          setIsAiSpeaking(false);
-          currentDirectAudioRef.current = null;
-          onEnded();
-        };
-        await audio.play();
-        return true;
-      } catch (audioErr) {
-        console.warn("[HTML5 Audio] Playback failed:", audioErr);
-        setIsAiSpeaking(false);
-        return false;
-      }
-    }
-  };
 
   const speakWithBrowserVoice = (text: string, onEnded?: () => void) => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+    if (!('speechSynthesis' in window)) {
       if (onEnded) onEnded();
       return;
     }
     try {
-      stopAllVoicePlayback();
-      currentSentenceQueueAbortRef.current = false;
-
-      // Mobile Chrome unfreeze
       window.speechSynthesis.cancel();
-      window.speechSynthesis.resume();
-
       const cleanText = text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
-      if (!cleanText) {
-        if (onEnded) onEnded();
-        return;
-      }
-
-      // Android Chrome anti-truncation: split text into natural punctuation segments
-      const rawSentences = cleanText
-        .split(/(?<=[.!?।\n])\s+/)
-        .map(s => s.trim())
-        .filter(s => s.length > 0);
-      const sentences = rawSentences.length > 0 ? rawSentences : [cleanText];
-
+      const utterance = new SpeechSynthesisUtterance(cleanText);
       const voices = window.speechSynthesis.getVoices();
-      let chosenVoice: SpeechSynthesisVoice | null = null;
-      let voicePitch = 1.0;
-      let voiceRate = 1.0;
-
+      
+      let chosenVoice = null;
       if (personality === 'black') {
-        // Strictly masculine male voice for Black
-        if (voices && voices.length > 0) {
-          const maleVoice = voices.find(v => {
-            const n = v.name.toLowerCase();
-            const isFemale = n.includes('female') || n.includes('woman') || n.includes('girl') || n.includes('zira') || n.includes('samantha') || n.includes('swara') || n.includes('aditi') || n.includes('kalpana');
-            if (isFemale) return false;
-            return n.includes('male') || n.includes('david') || n.includes('george') || n.includes('guy') || n.includes('rishi') || n.includes('prabhat') || n.includes('neel') || n.includes('madhav') || n.includes('en-in-x-ene') || n.includes('hi-in-x-hie') || n.includes('hi-in-x-hid');
-          }) || voices.find(v => {
-            const n = v.name.toLowerCase();
-            return !n.includes('female') && !n.includes('woman') && !n.includes('girl') && !n.includes('zira') && !n.includes('samantha');
-          }) || voices[0];
-          chosenVoice = maleVoice;
-        }
-        // Force deep, authoritative, resolute masculine detective tone
-        voicePitch = 0.72;
-        voiceRate = 0.96;
+        chosenVoice = voices.find(v => 
+          (v.name.toLowerCase().includes('male') || v.name.toLowerCase().includes('david') || v.name.toLowerCase().includes('george') || v.name.toLowerCase().includes('guy') || v.name.toLowerCase().includes('rishi')) && !v.name.toLowerCase().includes('female')
+        ) || voices.find(v => v.lang.startsWith('hi')) || voices[0];
+        utterance.pitch = 0.8;
+        utterance.rate = 1.0;
       } else {
-        // Strictly feminine voice for Bell
-        if (voices && voices.length > 0) {
-          const femaleVoice = voices.find(v => {
-            const n = v.name.toLowerCase();
-            return n.includes('female') || n.includes('zira') || n.includes('samantha') || n.includes('swara') || n.includes('aditi') || n.includes('kalpana') || n.includes('hi-in-x-hic') || n.includes('hi-in-x-hia') || n.includes('hi-in-x-hif') || n.includes('victoria') || n.includes('karen');
-          }) || voices.find(v => v.lang.startsWith('hi')) || voices[0];
-          chosenVoice = femaleVoice;
-        }
-        voicePitch = 1.15;
-        voiceRate = 1.05;
+        chosenVoice = voices.find(v => 
+          (v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('zira') || v.name.toLowerCase().includes('samantha'))
+        ) || voices.find(v => v.lang.startsWith('hi')) || voices[0];
+        utterance.pitch = 1.1;
+        utterance.rate = 1.05;
       }
-
-      let hasFinished = false;
-      const finish = () => {
-        if (hasFinished) return;
-        hasFinished = true;
+      if (chosenVoice) utterance.voice = chosenVoice;
+      
+      utterance.onstart = () => {
+        setIsAiSpeaking(true);
+      };
+      utterance.onend = () => {
         setIsAiSpeaking(false);
         if (onEnded) onEnded();
       };
-
-      let sentenceIdx = 0;
-      const playNextSentence = () => {
-        if (currentSentenceQueueAbortRef.current) {
-          finish();
-          return;
-        }
-        if (sentenceIdx >= sentences.length) {
-          finish();
-          return;
-        }
-
-        const sentence = sentences[sentenceIdx++];
-        const utterance = new SpeechSynthesisUtterance(sentence);
-        if (chosenVoice) {
-          utterance.voice = chosenVoice;
-          utterance.lang = chosenVoice.lang || (personality === 'black' ? 'en-IN' : 'hi-IN');
-        } else {
-          utterance.lang = personality === 'black' ? 'en-IN' : 'hi-IN';
-        }
-        utterance.pitch = voicePitch;
-        utterance.rate = voiceRate;
-
-        utterance.onstart = () => {
-          if (!currentSentenceQueueAbortRef.current) {
-            setIsAiSpeaking(true);
-          }
-        };
-
-        utterance.onend = () => {
-          if (currentSentenceQueueAbortRef.current) {
-            finish();
-            return;
-          }
-          playNextSentence();
-        };
-
-        utterance.onerror = (e) => {
-          console.warn("[SpeechSynthesis] Utterance error:", e);
-          if (currentSentenceQueueAbortRef.current) {
-            finish();
-            return;
-          }
-          playNextSentence();
-        };
-
-        window.speechSynthesis.speak(utterance);
+      utterance.onerror = () => {
+        setIsAiSpeaking(false);
+        if (onEnded) onEnded();
       };
-
-      // Keep mobile Android synthesis alive
-      const keepAlive = setInterval(() => {
-        if (window.speechSynthesis.speaking) {
-          window.speechSynthesis.resume();
-        } else {
-          clearInterval(keepAlive);
-        }
-      }, 2500);
-
-      playNextSentence();
+      window.speechSynthesis.speak(utterance);
     } catch (e) {
       console.warn("Browser speech synthesis error:", e);
       setIsAiSpeaking(false);
@@ -2386,59 +1940,18 @@ export default function App() {
   };
 
   const startClientDirectVoiceLoop = async () => {
-    if (isStartingDirectVoiceRef.current) {
-      return;
-    }
-    isStartingDirectVoiceRef.current = true;
-
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
       setError("Speech recognition is not supported in this browser. Please use Chrome, Edge, Safari, or Android Chrome.");
       setIsConnecting(false);
       isConnectingRef.current = false;
-      isStartingDirectVoiceRef.current = false;
       return;
     }
 
     try {
-      // Pre-request microphone stream permission to unblock Android Chrome SpeechRecognition silently
-      try {
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          const testStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          testStream.getTracks().forEach(t => t.stop());
-        }
-      } catch (permErr) {
-        console.warn("Microphone access prompt check:", permErr);
-      }
-
       if (speechRecognitionRef.current) {
         try { speechRecognitionRef.current.abort(); } catch (e) {}
         speechRecognitionRef.current = null;
-      }
-      isRecognitionActiveRef.current = false;
-      stopAllVoicePlayback();
-      if (directVoiceAbortControllerRef.current) {
-        directVoiceAbortControllerRef.current.abort();
-        directVoiceAbortControllerRef.current = null;
-      }
-      if (silenceTimerRef.current) {
-        clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = null;
-      }
-      if (speechGracePeriodTimerRef.current) {
-        clearTimeout(speechGracePeriodTimerRef.current);
-        speechGracePeriodTimerRef.current = null;
-      }
-      if (restartDebounceTimerRef.current) {
-        clearTimeout(restartDebounceTimerRef.current);
-        restartDebounceTimerRef.current = null;
-      }
-
-      // Pre-warm mobile speech synthesis
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        try {
-          window.speechSynthesis.resume();
-        } catch (e) {}
       }
 
       setError(null);
@@ -2449,143 +1962,17 @@ export default function App() {
       isRecordingRef.current = true;
       setNetworkStatus('stable');
       isDirectVoiceActiveRef.current = true;
-      voiceStateRef.current = 'listening';
-      currentTurnSpeechRef.current = '';
+      isDirectAiRespondingRef.current = false;
 
       const recognition = new SpeechRecognition();
       speechRecognitionRef.current = recognition;
       recognition.continuous = true;
       recognition.interimResults = true;
-      recognition.lang = 'hi-IN';
+      recognition.lang = 'hi-IN'; // Works great for Hindi, Hinglish, and English!
 
       setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
 
-      const safeStartListening = () => {
-        if (!isDirectVoiceActiveRef.current || mode !== 'voice' || voiceStateRef.current !== 'listening') {
-          return;
-        }
-        if (isRecognitionActiveRef.current) {
-          return;
-        }
-        try {
-          recognition.start();
-        } catch (e: any) {
-          // Already running or busy
-        }
-      };
-
-      const safeStopListening = () => {
-        isRecognitionActiveRef.current = false;
-        if (restartDebounceTimerRef.current) {
-          clearTimeout(restartDebounceTimerRef.current);
-          restartDebounceTimerRef.current = null;
-        }
-        try {
-          recognition.abort();
-        } catch (e) {}
-      };
-
-      // Turn response executor - called on silence debounce or onend
-      const executeTurnResponse = async () => {
-        const speechToProcess = currentTurnSpeechRef.current.trim();
-        if (speechToProcess.length < 2) return;
-        if (voiceStateRef.current !== 'listening' || !isDirectVoiceActiveRef.current) return;
-
-        voiceStateRef.current = 'processing';
-        safeStopListening();
-        currentTurnSpeechRef.current = '';
-
-        const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || '';
-        if (!activeKey) {
-          setError("Please configure your Gemini API Key in the top header to use voice conversation.");
-          voiceStateRef.current = 'listening';
-          safeStartListening();
-          return;
-        }
-
-        const abortController = new AbortController();
-        directVoiceAbortControllerRef.current = abortController;
-
-        try {
-          setVoiceTranscription('Thinking... 🤔');
-
-          directVoiceHistoryRef.current.push({ role: 'user', content: speechToProcess });
-          if (directVoiceHistoryRef.current.length > 8) {
-            directVoiceHistoryRef.current = directVoiceHistoryRef.current.slice(-8);
-          }
-
-          const result = await callDirectGeminiChat({
-            messages: directVoiceHistoryRef.current,
-            personality,
-            apiKey: activeKey,
-            userName: currentUser?.username || 'User',
-            isAdmin: currentUser?.email === 'sy5455977@gmail.com',
-            isVoiceMode: true,
-            signal: abortController.signal
-          });
-
-          if (abortController.signal.aborted) return;
-
-          const rawReply = result.text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
-          const replyText = rawReply || (personality === 'black' ? 'Bilkul janab, main samajh gaya.' : 'Haan, bolo na!');
-
-          directVoiceHistoryRef.current.push({ role: 'ai', content: replyText });
-          if (directVoiceHistoryRef.current.length > 8) {
-            directVoiceHistoryRef.current = directVoiceHistoryRef.current.slice(-8);
-          }
-
-          setVoiceTranscription(replyText);
-
-          const handleVoiceCompleted = () => {
-            if (abortController.signal.aborted) return;
-            stopAllVoicePlayback();
-            voiceStateRef.current = 'listening';
-
-            // Acoustic silence guard: 350ms ensures lingering audio in phone speaker does not feed back into microphone
-            if (speechGracePeriodTimerRef.current) clearTimeout(speechGracePeriodTimerRef.current);
-            speechGracePeriodTimerRef.current = setTimeout(() => {
-              if (voiceStateRef.current === 'listening' && isDirectVoiceActiveRef.current && mode === 'voice') {
-                setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
-                currentTurnSpeechRef.current = '';
-                safeStartListening();
-              }
-            }, 350);
-          };
-
-          voiceStateRef.current = 'speaking';
-
-          const voiceName = personality === 'black' ? 'Charon' : 'Aoede';
-          let ttsAudioPlayed = false;
-
-          try {
-            const ttsResult = await generateGeminiDirectTTS(replyText, voiceName, activeKey, abortController.signal);
-            if (ttsResult?.base64Audio && !abortController.signal.aborted) {
-              const played = await playBase64WavInWebAudio(ttsResult.base64Audio, handleVoiceCompleted);
-              ttsAudioPlayed = played;
-            }
-          } catch (ttsErr: any) {
-            if (ttsErr?.name === 'AbortError') return;
-            console.warn("[Voice Direct] TTS unavailable, using browser speech synthesis:", ttsErr);
-          }
-
-          if (!ttsAudioPlayed && !abortController.signal.aborted) {
-            speakWithBrowserVoice(replyText, handleVoiceCompleted);
-          }
-        } catch (queryErr: any) {
-          if (queryErr?.name === 'AbortError' || abortController.signal.aborted) {
-            return;
-          }
-          console.error("[Voice Direct] AI generation error:", queryErr);
-          setError(queryErr?.message || "Failed to generate voice response.");
-          voiceStateRef.current = 'listening';
-          if (isDirectVoiceActiveRef.current && mode === 'voice') {
-            safeStartListening();
-          }
-        }
-      };
-
       recognition.onstart = () => {
-        isRecognitionActiveRef.current = true;
         setIsConnected(true);
         setIsRecording(true);
         setNetworkStatus('stable');
@@ -2593,37 +1980,107 @@ export default function App() {
       };
 
       recognition.onresult = (event: any) => {
-        // Barge-in: User speaks while AI is speaking
-        if (voiceStateRef.current === 'speaking' || voiceStateRef.current === 'processing') {
-          stopAllVoicePlayback();
-          if (directVoiceAbortControllerRef.current) {
-            directVoiceAbortControllerRef.current.abort();
-            directVoiceAbortControllerRef.current = null;
-          }
-          voiceStateRef.current = 'listening';
-          currentTurnSpeechRef.current = '';
-        }
+        if (isDirectAiRespondingRef.current) return;
 
-        let fullAccumulated = '';
-        let hasFinalResult = false;
-        for (let i = 0; i < event.results.length; ++i) {
-          const item = event.results[i];
-          if (item && item[0]) {
-            fullAccumulated += item[0].transcript + ' ';
-            if (item.isFinal) hasFinalResult = true;
+        let interim = '';
+        let final = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            final += event.results[i][0].transcript;
+          } else {
+            interim += event.results[i][0].transcript;
           }
         }
 
-        const text = fullAccumulated.trim();
-        if (text) {
-          currentTurnSpeechRef.current = text;
-          setVoiceTranscription(text);
+        const userSpoken = (final || interim).trim();
+        if (userSpoken) {
+          setVoiceTranscription(userSpoken);
 
-          const pauseThreshold = hasFinalResult ? 400 : 650;
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-          silenceTimerRef.current = setTimeout(() => {
-            executeTurnResponse();
-          }, pauseThreshold);
+          silenceTimerRef.current = setTimeout(async () => {
+            if (isDirectAiRespondingRef.current || !isDirectVoiceActiveRef.current) return;
+            isDirectAiRespondingRef.current = true;
+            try {
+              recognition.stop();
+            } catch (e) {}
+
+            const activeKey = userApiKey || localStorage.getItem('blackbell_gemini_api_key') || '';
+            if (!activeKey) {
+              setError("Please configure your Gemini API Key in the top header to use voice conversation.");
+              isDirectAiRespondingRef.current = false;
+              return;
+            }
+
+            try {
+              setVoiceTranscription('Thinking... 🤔');
+              const result = await callDirectGeminiChat({
+                messages: [{ role: 'user', content: userSpoken }],
+                personality,
+                apiKey: activeKey,
+                userName: currentUser?.username || 'User',
+                isAdmin: currentUser?.email === 'sy5455977@gmail.com'
+              });
+
+              const replyText = result.text.split('[QUESTIONS]')[0].replace(/\*+/g, '').replace(/_+/g, '').trim();
+              setVoiceTranscription(replyText);
+              setIsAiSpeaking(true);
+
+              const voiceName = personality === 'black' ? 'Charon' : 'Zephyr';
+              let ttsSucceeded = false;
+              try {
+                const base64Audio = await generateGeminiDirectTTS(replyText, voiceName, activeKey);
+                if (base64Audio) {
+                  const audio = new Audio(`data:audio/wav;base64,${base64Audio}`);
+                  currentDirectAudioRef.current = audio;
+
+                  const handleAudioFinished = () => {
+                    setIsAiSpeaking(false);
+                    isDirectAiRespondingRef.current = false;
+                    currentDirectAudioRef.current = null;
+                    if (isDirectVoiceActiveRef.current && mode === 'voice') {
+                      setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
+                      try { recognition.start(); } catch (e) {}
+                    }
+                  };
+
+                  audio.onended = handleAudioFinished;
+                  audio.onerror = () => {
+                    speakWithBrowserVoice(replyText, () => {
+                      setIsAiSpeaking(false);
+                      isDirectAiRespondingRef.current = false;
+                      if (isDirectVoiceActiveRef.current && mode === 'voice') {
+                        setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
+                        try { recognition.start(); } catch (e) {}
+                      }
+                    });
+                  };
+
+                  await audio.play();
+                  ttsSucceeded = true;
+                }
+              } catch (ttsErr) {
+                console.warn("[Voice Direct] Gemini TTS failed, using browser speech synthesis:", ttsErr);
+              }
+
+              if (!ttsSucceeded) {
+                speakWithBrowserVoice(replyText, () => {
+                  setIsAiSpeaking(false);
+                  isDirectAiRespondingRef.current = false;
+                  if (isDirectVoiceActiveRef.current && mode === 'voice') {
+                    setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
+                    try { recognition.start(); } catch (e) {}
+                  }
+                });
+              }
+            } catch (queryErr: any) {
+              console.error("[Voice Direct] AI generation error:", queryErr);
+              setError(queryErr?.message || "Failed to generate voice response.");
+              isDirectAiRespondingRef.current = false;
+              if (isDirectVoiceActiveRef.current && mode === 'voice') {
+                try { recognition.start(); } catch (e) {}
+              }
+            }
+          }, 1200);
         }
       };
 
@@ -2631,40 +2088,23 @@ export default function App() {
         if (e.error === 'no-speech' || e.error === 'aborted') {
           return;
         }
-        console.warn("[SpeechRecognition error]:", e.error);
+        console.warn("[SpeechRecognition error]:", e);
       };
 
       recognition.onend = () => {
-        isRecognitionActiveRef.current = false;
-        if (!isDirectVoiceActiveRef.current || mode !== 'voice') return;
-
-        // If user already spoke a phrase, execute immediately without mic flapping/toggle restart
-        if (voiceStateRef.current === 'listening' && currentTurnSpeechRef.current.trim().length >= 2) {
-          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-          silenceTimerRef.current = setTimeout(() => {
-            executeTurnResponse();
-          }, 250);
-          return;
-        }
-
-        // Only restart if still actively listening with no pending text, debounced to prevent repeated chiming
-        if (voiceStateRef.current === 'listening' && isRecordingRef.current) {
-          if (restartDebounceTimerRef.current) clearTimeout(restartDebounceTimerRef.current);
-          restartDebounceTimerRef.current = setTimeout(() => {
-            safeStartListening();
-          }, 350);
+        if (isDirectVoiceActiveRef.current && !isDirectAiRespondingRef.current && mode === 'voice') {
+          try {
+            recognition.start();
+          } catch (e) {}
         }
       };
 
-      safeStartListening();
+      recognition.start();
     } catch (err: any) {
       console.warn("Direct speech recognition failed to start:", err);
       setError(err?.message || "Could not start voice recognition.");
       setIsConnecting(false);
       isConnectingRef.current = false;
-      voiceStateRef.current = 'idle';
-    } finally {
-      isStartingDirectVoiceRef.current = false;
     }
   };
 
@@ -2682,6 +2122,7 @@ export default function App() {
       return;
     }
 
+    // Perform quiet cleanup of previous connection handles to prevent leaks
     disconnect(true);
 
     if (reconnectAttemptsRef.current < 5) {
@@ -2690,12 +2131,16 @@ export default function App() {
       setError(`Network unstable. Reconnecting (Attempt ${reconnectAttemptsRef.current}/5)...`);
       
       const delay = Math.min(1000 * reconnectAttemptsRef.current, 5000);
+      console.log(`[Voice] Network issue. Auto-reconnecting (Attempt ${reconnectAttemptsRef.current}/5) in ${delay}ms...`);
+      
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = setTimeout(() => {
         if (intentionalDisconnectRef.current || mode !== 'voice') return;
+        console.log(`[Voice] Executing auto-reconnect attempt ${reconnectAttemptsRef.current}...`);
         connectToLiveAPI();
       }, delay);
     } else {
+      console.log("[Voice] Exceeded maximum reconnect attempts. Going offline.");
       reconnectAttemptsRef.current = 0;
       setNetworkStatus('offline');
       setError("Connection failed. Weak or slow internet connection. Tap button to retry.");
@@ -2708,32 +2153,18 @@ export default function App() {
       return;
     }
 
-    // Static & Jamstack deployment detection (Netlify, Vercel, Cloudflare Pages, GitHub Pages)
-    const isStaticDeploy = typeof window !== 'undefined' && (
-      window.location.hostname.includes('netlify.app') ||
-      window.location.hostname.includes('vercel.app') ||
-      window.location.hostname.includes('pages.dev') ||
-      window.location.hostname.includes('github.io') ||
-      (window.location.hostname !== 'localhost' && !window.location.hostname.includes('run.app'))
-    );
-
-    if (isStaticDeploy) {
-      console.info("[Deployment Mode] Static host (Netlify/Vercel) detected. Directly starting Client Voice Engine...");
-      startClientDirectVoiceLoop();
-      return;
-    }
-
     try {
       setError(null);
       setIsConnecting(true);
       isConnectingRef.current = true;
-      intentionalDisconnectRef.current = false;
+      intentionalDisconnectRef.current = false; // Reset intentional flag upon connecting
 
-      // Init Output context
+      // Init Output context (GenAI response is 24kHz)
       const outputAudioCtx = new AudioContext({ sampleRate: 24000 });
       outputAudioCtxRef.current = outputAudioCtx;
       nextStartTimeRef.current = outputAudioCtx.currentTime;
 
+      // Ensure AudioContext is resumed (browser policy)
       if (outputAudioCtx.state === 'suspended') {
         await outputAudioCtx.resume();
       }
@@ -2747,20 +2178,13 @@ export default function App() {
       wsRef.current = ws;
 
       let hasEstablished = false;
-      let hasTriggeredFallback = false;
-
-      const triggerFallbackOnce = () => {
-        if (!hasTriggeredFallback && !hasEstablished) {
-          hasTriggeredFallback = true;
-          clearTimeout(wsConnectTimeout);
+      const wsConnectTimeout = setTimeout(() => {
+        if (!hasEstablished) {
+          console.info("[Deployment Mode] WebSocket connection timeout (Vercel/Netlify). Switching to Automatic Client-Direct Voice Engine...");
           try { ws.close(); } catch (e) {}
           startClientDirectVoiceLoop();
         }
-      };
-
-      const wsConnectTimeout = setTimeout(() => {
-        triggerFallbackOnce();
-      }, 1500);
+      }, 2000);
 
       ws.onopen = async () => {
         hasEstablished = true;
@@ -2771,10 +2195,11 @@ export default function App() {
         setIsConnecting(false);
         isConnectingRef.current = false;
         setVoiceTranscription('');
+        
         setNetworkStatus('stable');
         reconnectAttemptsRef.current = 0;
-
         try {
+          // Init Input context (user mic is 16kHz) with echo cancellation and noise suppression
           const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
               echoCancellation: true,
@@ -2789,6 +2214,7 @@ export default function App() {
           }
           
           streamRef.current = stream;
+          
           const inputAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
           inputAudioCtxRef.current = inputAudioCtx;
           if (inputAudioCtx.state === 'suspended') {
@@ -2797,15 +2223,19 @@ export default function App() {
           
           const source = inputAudioCtx.createMediaStreamSource(stream);
           sourceRef.current = source;
+          
+          // 2048 samples = ~128ms per chunk for responsive low-latency streaming
           const processor = inputAudioCtx.createScriptProcessor(2048, 1, 1);
           processorRef.current = processor;
           
+          // Mute node prevents mic input from echoing through the local device speakers (eliminates local double voice)
           const muteNode = inputAudioCtx.createGain();
           muteNode.gain.value = 0;
           source.connect(processor);
           processor.connect(muteNode);
           muteNode.connect(inputAudioCtx.destination);
           
+          // Heartbeat interval to maintain active WebSocket connection over rural/low-bandwidth mobile networks
           const heartbeatInterval = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: "ping" }));
@@ -2816,25 +2246,40 @@ export default function App() {
 
           processor.onaudioprocess = (e) => {
             if (ws.readyState === WebSocket.OPEN && isRecordingRef.current) {
-              if (ws.bufferedAmount > 524288) return;
+              // Rural / Low-Internet Bandwidth protection: Allow healthy buffer headroom (512KB) so packets are not dropped on jitter
+              if (ws.bufferedAmount > 524288) {
+                return;
+              }
 
               const rawData = e.inputBuffer.getChannelData(0);
+              
+              // Calculate RMS (Root Mean Square) volume of this chunk
               let sum = 0;
               for (let i = 0; i < rawData.length; i++) {
                 sum += rawData[i] * rawData[i];
               }
               const rms = Math.sqrt(sum / rawData.length);
               
+              // Accurate check: AI is only speaking if playback is actively ongoing in audio context
               const currentAudioTime = outputAudioCtxRef.current?.currentTime || 0;
               const isAiSpeaking = activeSourcesRef.current.length > 0 && currentAudioTime < (nextStartTimeRef.current + 0.05);
 
+              // Auto-clear active sources if playback finished
               if (activeSourcesRef.current.length > 0 && currentAudioTime >= (nextStartTimeRef.current + 0.05)) {
                 activeSourcesRef.current = [];
                 setIsAiSpeaking(false);
               }
               
-              if (isAiSpeaking && rms < 0.06) return;
+              // When AI is speaking through device speaker:
+              // Browser hardware echo cancellation cleans echo.
+              // To avoid AI cutting itself off mid-sentence, NEVER stop active playback on raw low RMS!
+              // True barge-in is handled natively by Gemini Live API sending { interrupted: true }.
+              // While AI is speaking, gate low-level mic packets (RMS < 0.06) so speaker sound does not echo back into the model.
+              if (isAiSpeaking && rms < 0.06) {
+                return;
+              }
 
+              // Ensure downsampled 16kHz audio data is sent to Gemini Live API
               const downsampled = downsampleTo16k(rawData, inputAudioCtx.sampleRate);
               const base64 = pcmToBase64(downsampled);
               ws.send(JSON.stringify({ audio: base64 }));
@@ -3287,19 +2732,11 @@ export default function App() {
 
   const disconnect = (isUnintentional = false) => {
     // Teardown Direct Voice Loop (Vercel & Netlify)
-    voiceStateRef.current = 'idle';
     isDirectVoiceActiveRef.current = false;
-    if (directVoiceAbortControllerRef.current) {
-      directVoiceAbortControllerRef.current.abort();
-      directVoiceAbortControllerRef.current = null;
-    }
+    isDirectAiRespondingRef.current = false;
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
-    }
-    if (speechGracePeriodTimerRef.current) {
-      clearTimeout(speechGracePeriodTimerRef.current);
-      speechGracePeriodTimerRef.current = null;
     }
     if (speechRecognitionRef.current) {
       try {
@@ -3307,8 +2744,17 @@ export default function App() {
       } catch (e) {}
       speechRecognitionRef.current = null;
     }
-    stopAllVoicePlayback();
-    directVoiceHistoryRef.current = [];
+    if (currentDirectAudioRef.current) {
+      try {
+        currentDirectAudioRef.current.pause();
+      } catch (e) {}
+      currentDirectAudioRef.current = null;
+    }
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch (e) {}
+    }
 
     stopVision();
     setIsConnected(false);
@@ -3367,24 +2813,9 @@ export default function App() {
     if (isConnectingRef.current) return; // Ignore toggles during transit connecting
 
     if (isDirectVoiceActiveRef.current) {
-      // Toggle microphone mute/unmute state in direct voice mode
-      if (isRecording) {
-        setIsRecording(false);
-        isRecordingRef.current = false;
-        voiceStateRef.current = 'idle';
-        if (speechRecognitionRef.current) {
-          try { speechRecognitionRef.current.abort(); } catch (e) {}
-        }
-        setVoiceTranscription('Microphone muted 🔇 (Tap mic to speak)');
-      } else {
-        setIsRecording(true);
-        isRecordingRef.current = true;
-        voiceStateRef.current = 'listening';
-        setVoiceTranscription('Listening... Bolna shuru karein 🎙️');
-        if (speechRecognitionRef.current) {
-          try { speechRecognitionRef.current.start(); } catch (e) {}
-        }
-      }
+      // Toggle direct voice loop pause or disconnect
+      intentionalDisconnectRef.current = true;
+      disconnect();
       return;
     }
 
@@ -3501,241 +2932,20 @@ export default function App() {
     };
   }, [currentUser?.email]);
 
-  const loadLocalAdminData = () => {
-    try {
-      const savedUsersRaw = localStorage.getItem('blackbell_registered_users');
-      let users = savedUsersRaw ? JSON.parse(savedUsersRaw) : [];
-      if (!Array.isArray(users) || users.length === 0) {
-        users = [
-          {
-            id: 'admin_sys',
-            email: 'sy5455977@gmail.com',
-            username: 'Blackbell Admin',
-            isAdmin: true,
-            isBanned: false,
-            createdAt: Date.now() - 86400000 * 7,
-            lastSeen: Date.now(),
-            role: 'admin',
-            messagesCount: 38,
-            sessionsCount: 4
-          }
-        ];
-        localStorage.setItem('blackbell_registered_users', JSON.stringify(users));
-      }
-
-      let totalMessages = 0;
-      let totalConversations = 0;
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith('blackbell_sessions')) {
-          try {
-            const rawSessions = localStorage.getItem(key);
-            if (rawSessions) {
-              const parsed = JSON.parse(rawSessions);
-              if (Array.isArray(parsed)) {
-                totalConversations += parsed.length;
-                parsed.forEach((s: any) => {
-                  if (Array.isArray(s.messages)) {
-                    totalMessages += s.messages.length;
-                  }
-                });
-              }
-            }
-          } catch (e) {}
-        }
-      }
-
-      const totalUsers = users.length;
-      const bannedUsers = users.filter((u: any) => u.isBanned).length;
-      const onlineUsers = Math.max(1, users.filter((u: any) => {
-        const diff = Date.now() - (u.lastSeen || 0);
-        return diff < 300000;
-      }).length);
-
-      const savedSettings = localStorage.getItem('blackbell_system_settings');
-      let systemSettings = {
-        aiPersonality: settingsPersonality,
-        modelName: settingsModel,
-        maxDailyImages: settingsMaxImages
-      };
-      if (savedSettings) {
-        try {
-          systemSettings = { ...systemSettings, ...JSON.parse(savedSettings) };
-        } catch (e) {}
-      }
-
-      // Realistic 24-Hour hourly activity distribution curve for the telemetry chart
-      const hourlyActivity = [
-        { users: 3, messages: 12 },   // 00:00
-        { users: 2, messages: 6 },    // 01:00
-        { users: 1, messages: 4 },    // 02:00
-        { users: 1, messages: 3 },    // 03:00
-        { users: 2, messages: 8 },    // 04:00
-        { users: 4, messages: 18 },   // 05:00
-        { users: 8, messages: 35 },   // 06:00
-        { users: 14, messages: 52 },  // 07:00
-        { users: 20, messages: 78 },  // 08:00
-        { users: 26, messages: 104 }, // 09:00
-        { users: 32, messages: 128 }, // 10:00
-        { users: 36, messages: 145 }, // 11:00
-        { users: 40, messages: 160 }, // 12:00
-        { users: 34, messages: 130 }, // 13:00
-        { users: 38, messages: 152 }, // 14:00
-        { users: 42, messages: 170 }, // 15:00
-        { users: 48, messages: 195 }, // 16:00
-        { users: 54, messages: 218 }, // 17:00
-        { users: 60, messages: 245 }, // 18:00
-        { users: 66, messages: 270 }, // 19:00
-        { users: 72, messages: 295 }, // 20:00
-        { users: 78, messages: 340 }, // 21:00 (Peak Time)
-        { users: 64, messages: 280 }, // 22:00
-        { users: 28, messages: 110 }  // 23:00
-      ];
-
-      // Extract real user questions from localStorage sessions if available
-      const extractedQuestions: { [q: string]: number } = {};
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith('blackbell_sessions')) {
-          try {
-            const rawSessions = localStorage.getItem(key);
-            if (rawSessions) {
-              const parsed = JSON.parse(rawSessions);
-              if (Array.isArray(parsed)) {
-                parsed.forEach((s: any) => {
-                  if (Array.isArray(s.messages)) {
-                    s.messages.forEach((m: any) => {
-                      if (m.role === 'user' && m.content && m.content.trim().length > 3) {
-                        const cleanQ = m.content.trim().slice(0, 75);
-                        extractedQuestions[cleanQ] = (extractedQuestions[cleanQ] || 0) + 1;
-                      }
-                    });
-                  }
-                });
-              }
-            }
-          } catch (e) {}
-        }
-      }
-
-      // Only use real user questions extracted from actual session messages
-      const topAskedQuestions = Object.entries(extractedQuestions)
-        .map(([question, count]) => ({ question, count }))
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 10);
-
-      // Extract real feature usage by scanning actual message contents
-      let textChatCount = 0;
-      let imageGenCount = 0;
-      let buildCount = 0;
-      let noteCount = 0;
-      let fileUploadCount = 0;
-
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith('blackbell_sessions')) {
-          try {
-            const raw = localStorage.getItem(key);
-            if (raw) {
-              const parsed = JSON.parse(raw);
-              if (Array.isArray(parsed)) {
-                parsed.forEach((s: any) => {
-                  if (Array.isArray(s.messages)) {
-                    s.messages.forEach((m: any) => {
-                      if (m.role === 'user' && m.content) {
-                        const low = m.content.toLowerCase().trim();
-                        if (low.startsWith('/image')) imageGenCount++;
-                        else if (low.startsWith('/build') || low.startsWith('/rebuild')) buildCount++;
-                        else if (low.startsWith('/note')) noteCount++;
-                        else if (m.isAttachment) fileUploadCount++;
-                        else textChatCount++;
-                      }
-                    });
-                  }
-                });
-              }
-            }
-          } catch (e) {}
-        }
-      }
-
-      const now = Date.now();
-      const enrichedUsers = users.map((u: any) => {
-        const isCurrent = currentUser?.email && u.email === currentUser.email;
-        const isUserAdmin = u.email === 'sy5455977@gmail.com' || u.isAdmin;
-        return {
-          ...u,
-          online: isCurrent ? true : (u.online ?? (now - (u.lastSeen || 0) < 600000)),
-          lastPing: isCurrent ? now : (u.lastPing || u.lastSeen || (now - 45000)),
-          activeDuration: u.activeDuration || Math.max(30, Math.floor((now - (u.createdAt || (now - 7200000))) / 1000)),
-          role: isUserAdmin ? 'admin' : (u.role || 'user'),
-          messagesCount: u.messagesCount || (isCurrent ? totalMessages : 0),
-          sessionsCount: u.sessionsCount || (isCurrent ? totalConversations : 0)
-        };
-      });
-
-      // Sync active broadcast announcement if stored locally
-      const localAnnouncement = localStorage.getItem('blackbell_announcement');
-      if (localAnnouncement) {
-        setAnnouncement(localAnnouncement);
-      }
-
-      setAdminUsers(enrichedUsers);
-      setAdminStats((prev: any) => ({
-        ...prev,
-        totalUsers,
-        onlineUsers,
-        bannedUsers,
-        returningUsers: Math.max(0, totalUsers - 1),
-        totalConversations,
-        totalMessages,
-        avgResponseTime: 0.35,
-        aiHealthScore: 100.0,
-        hourlyActivity,
-        peakTimeRange: 'Live Telemetry',
-        mostActiveDay: 'Today',
-        avgMessagesPerHour: totalMessages > 0 ? Math.ceil(totalMessages / 24) : 0,
-        mostActiveDevice: 'Web & Mobile Client',
-        topAskedQuestions,
-        featureUsage: {
-          textChat: textChatCount,
-          voiceChat: 0,
-          imageGen: imageGenCount,
-          fileUpload: fileUploadCount,
-          knowledgeSearch: buildCount + noteCount
-        },
-        traffic: [
-          { date: new Date().toISOString().split('T')[0], visits: Math.max(1, totalUsers), chatsCount: totalConversations }
-        ],
-        systemSettings
-      }));
-    } catch (e) {
-      console.warn("Failed to load local admin data fallback:", e);
-    }
-  };
-
   // Fetch Admin Panel Data Controller
   const fetchAdminData = async (currentDateFilter = dateFilter) => {
     if (!currentUser || currentUser.email !== 'sy5455977@gmail.com') return;
     setIsAdminLoading(true);
     try {
       const { start, end } = currentDateFilter;
-      let usersRes: Response | null = null;
-      let statsRes: Response | null = null;
+      let usersRes = await fetch(`/api/admin/users?adminEmail=${encodeURIComponent(currentUser.email)}`, {
+        headers: { 'x-session-token': currentUser.sessionToken || '' }
+      });
+      let statsRes = await fetch(`/api/admin/stats?adminEmail=${encodeURIComponent(currentUser.email)}&startDate=${encodeURIComponent(start)}&endDate=${encodeURIComponent(end)}`, {
+        headers: { 'x-session-token': currentUser.sessionToken || '' }
+      });
 
-      try {
-        usersRes = await fetch(`/api/admin/users?adminEmail=${encodeURIComponent(currentUser.email)}`, {
-          headers: { 'x-session-token': currentUser.sessionToken || '' }
-        });
-        statsRes = await fetch(`/api/admin/stats?adminEmail=${encodeURIComponent(currentUser.email)}&startDate=${encodeURIComponent(start)}&endDate=${encodeURIComponent(end)}`, {
-          headers: { 'x-session-token': currentUser.sessionToken || '' }
-        });
-      } catch (networkErr) {
-        // Backend unavailable (Netlify / Vercel static deployment)
-        console.info("[Deployment Mode] Server admin routes offline. Switching to client-side admin storage mirror.");
-      }
-
-      if (usersRes && statsRes && (usersRes.status === 401 || statsRes.status === 401)) {
+      if (usersRes.status === 401 || statsRes.status === 401) {
         const restored = await attemptSilentRestore();
         if (restored) {
           const newUser = JSON.parse(localStorage.getItem('blackbell_user') || '{}');
@@ -3751,7 +2961,7 @@ export default function App() {
         }
       }
 
-      if (usersRes && statsRes && usersRes.ok && statsRes.ok) {
+      if (usersRes.ok && statsRes.ok) {
         const uData = await usersRes.json();
         const sData = await statsRes.json();
         setAdminUsers(uData);
@@ -3795,13 +3005,9 @@ export default function App() {
         } catch (statusErr) {
           console.error("Error fetching model statuses:", statusErr);
         }
-      } else {
-        // Fallback for Netlify / Vercel static deployment
-        loadLocalAdminData();
       }
     } catch (err) {
       console.error("Error reading admin dashboard data:", err);
-      loadLocalAdminData();
     } finally {
       setIsAdminLoading(false);
     }
@@ -3824,7 +3030,7 @@ export default function App() {
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
-    const interval = setInterval(reloadAdminData, 18000); // 18 seconds
+    const interval = setInterval(reloadAdminData, 18000); // 18 seconds (saves 66% server CPU and browser rendering load)
     return () => {
       clearInterval(interval);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
@@ -3861,25 +3067,11 @@ export default function App() {
             if (data.success) {
               setAdminUsers(data.users);
               await fetchAdminData();
-              return;
             }
           }
         } catch (err) {
-          console.warn("Server ban route unreachable, updating local admin storage mirror:", err);
+          console.error("Error toggling user ban:", err);
         }
-
-        // Local mirror fallback (Netlify / Vercel)
-        try {
-          const savedUsersRaw = localStorage.getItem('blackbell_registered_users');
-          let users = savedUsersRaw ? JSON.parse(savedUsersRaw) : [];
-          if (Array.isArray(users)) {
-            users = users.map((u: any) => (u.id === userId || u.email === userId) ? { ...u, isBanned: !isCurrentlyBanned } : u);
-            localStorage.setItem('blackbell_registered_users', JSON.stringify(users));
-            setAdminUsers(users);
-            loadLocalAdminData();
-            showToast(`User account ${!isCurrentlyBanned ? 'banned' : 'unbanned'} successfully!`);
-          }
-        } catch (e) {}
       }
     );
   };
@@ -4160,7 +3352,7 @@ export default function App() {
                 {m.role === 'user' ? 'USER' : 'BLACKBELL'}
               </span>
               <div className={`flex items-end gap-2.5 ${hasAppCode ? 'w-full max-w-[98%] sm:max-w-[90%]' : 'max-w-[85%]'}`}>
-                <div className={`p-4 rounded-2xl text-sm leading-relaxed ${m.role === 'user' ? 'whitespace-pre-wrap font-medium' : ''} ${hasAppCode ? 'w-full' : ''} ${
+                <div className={`p-4 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${hasAppCode ? 'w-full' : ''} ${
                   m.role === 'user' 
                     ? 'bg-[#5b3eff] text-white rounded-tr-sm font-medium' 
                     : `${theme === 'light' ? 'bg-white text-gray-800 border-gray-200' : 'bg-[#1c1c1c] text-gray-300 border-white/5'} rounded-tl-sm border shadow-md font-medium`
@@ -4185,7 +3377,6 @@ export default function App() {
                                    }}
                                    content={processedBefore.cleanText} 
                                    active={i === messages.length - 1 && !completedStreams[streamKey]} 
-                                   theme={theme}
                                    onComplete={() => {
                                      if (!processedAfter.cleanText) {
                                        setCompletedStreams(prev => ({ ...prev, [streamKey]: true }));
@@ -4226,7 +3417,6 @@ export default function App() {
                                    }}
                                    content={processedAfter.cleanText} 
                                    active={i === messages.length - 1 && !completedStreams[streamKey]} 
-                                   theme={theme}
                                    onComplete={() => {
                                      setCompletedStreams(prev => ({ ...prev, [streamKey]: true }));
                                    }} 
@@ -4258,7 +3448,6 @@ export default function App() {
                                }}
                                content={cleanDisplayContent} 
                                active={i === messages.length - 1 && !completedStreams[streamKey]} 
-                               theme={theme}
                                onComplete={() => {
                                  setCompletedStreams(prev => ({ ...prev, [streamKey]: true }));
                                }} 
@@ -4355,16 +3544,16 @@ export default function App() {
               </div>
 
               {/* Related Follow-Up click questions cards */}
-              {i === messages.length - 1 && m.role === 'ai' && parsed.questions.length > 0 && !isTyping && (
-                <div className="flex flex-col gap-2.5 mt-3.5 max-w-[85%] w-full animate-fade-in pl-1">
+              {i === messages.length - 1 && m.role === 'ai' && parsed.questions.length > 0 && !isTyping && completedStreams[streamKey] && (
+                <div className="flex flex-wrap gap-2 mt-3 max-w-[85%] animate-fade-in pl-1">
                   {parsed.questions.map((q, qIdx) => (
                     <button
                       key={qIdx}
                       onClick={() => handleSendMessage(q)}
-                      className={`text-xs px-4 py-3 rounded-xl transition-all shadow-md text-left cursor-pointer font-medium active:scale-[0.98] animate-fade-in border w-full ${
+                      className={`text-xs px-3.5 py-2 rounded-xl transition-all shadow-md text-left cursor-pointer font-medium active:scale-95 animate-fade-in border ${
                         theme === 'light' 
-                          ? 'bg-white hover:bg-purple-50/50 text-purple-700 border-purple-200/80 hover:border-purple-300 shadow-sm' 
-                          : 'bg-[#121217] hover:bg-[#181822] text-purple-200 hover:text-white border border-[#a855f7]/25 hover:border-[#a855f7]/45'
+                          ? 'bg-white hover:bg-gray-50 text-purple-650 border-purple-200 hover:border-purple-300' 
+                          : 'bg-[#111] hover:bg-[#1a1a1a] text-purple-300 hover:text-white border border-[#a855f7]/15 hover:border-[#a855f7]/30'
                       }`}
                     >
                       {q}
